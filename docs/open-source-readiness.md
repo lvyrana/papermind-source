@@ -7,7 +7,8 @@
 - 作者已同意新建无旧历史的私有仓库；[`lvyrana/papermind-source`](https://github.com/lvyrana/papermind-source) 已创建，并通过 GitHub API 确认 `PRIVATE`。独立根提交 `072d5cc` 已推送到 `main`，没有继承旧提交。本地副本位于桌面 `papermind-source`；原开发仓库未提交或推送。尚未公开本批版本。
 - 当前 121 个白名单源码文件已导出，排除 53 个候选项；哈希逐项核对通过，无旧 `.git`、数据库、上传内容或历史截图。图形素材为应用图案；Connector XPI 核对仅含 manifest、bootstrap、SVG 和许可。扩展检查发现的 URL 用户信息仅为拒绝策略的 `example.org` 合成测试。
 - 首次副本完成 npm 干净安装、45 项前端测试、构建、lint、84 项隔离后端测试与真实本机 HTTP 检查；本机 Chrome 153 的 43 页合成 PDF 回归通过。安装时 npm 审计为 0；大 chunk 和测试客户端弃用提示保留。
-- 首轮远端 [CI 36684225658](https://github.com/lvyrana/papermind-source/actions/runs/36684225658) 中，Linux 依赖安装、前后端测试、构建、lint、npm 审计通过，PDF 回归因 Chromium 启动受 AppArmor 限制失败。已调整为 runner 预装 Chrome、保留沙箱；后续结果以实际运行记录为准，不把修好配置等同于 CI 已通过。
+- 首轮远端 [CI 36684225658](https://github.com/lvyrana/papermind-source/actions/runs/36684225658) 的 PDF 回归因下载版 Chromium 启动受 AppArmor 限制失败。改用 runner 预装 Chrome、保留沙箱后，提交 `ecd7a10` 的 [CI 36684651569](https://github.com/lvyrana/papermind-source/actions/runs/36684651569) **全部通过**：Ubuntu 24.04 下的哈希锁文件安装、85 项后端测试、隔离 HTTP、47 项前端测试、构建、lint、npm 审计和合成 PDF 浏览器回归均成功。原失败记录保留。
+- 最终本地复验同样为后端 85 项、前端 47 项，并验证导出哈希和 0755/0644 文件权限。新仓库 123 个文件（121 个源码文件及 2 个生成清单/草案标记），有独立根提交、无旧历史；匿名访问新仓库返回 404。两次源码提交后的有限历史扫描覆盖 135 个 blob、无超限跳过，未发现所检查模式的问题。大 chunk、Starlette 测试客户端弃用及旧版 GitHub actions 的 Node 20 弃用提示仍保留。
 - **旧仓库此前已公开**：GitHub 显示 `lvyrana/papermind` 为 `PUBLIC`，匿名请求确认历史 OpenRouter 配置可读取。此前关于原仓库私有、主项目从未公开的表述不准确。本轮未输出该密钥，也未调用供应商验证它。已请求作者确认是否将旧仓库转为私有；关闭公开访问不能撤回他人已保存的副本，旧密钥撤销仍需处理。
 
 ## 当前结论
@@ -108,7 +109,7 @@ python3 scripts/check_public_release.py
 - 仓库回归：`npm test` 42/42、隔离后端测试 45/45；lint 0 错误 / 2 个既有 Home.jsx 提示；`git diff --check` 通过。新增浏览器脚本和 CI 门槛，但云端工作流尚未运行。
 - 依赖审计：当前 `npm audit --omit=dev --json` 为 0；完整 `npm audit --json` 仍返回 9 个包级告警（6 high / 2 moderate / 1 low），涉及 Vite、PostCSS、Babel 等构建/开发链。没有对这些包执行强制升级，审计数据库及间接告警传播会变化，不能把与此前的数量差全部算成修复。开发服务器不得作为公网试用入口。
 
-尚未验证：Windows/微信内置浏览器、真实复杂中文 PDF、手机、CI 的 Linux Chromium、线上服务器。以上是本地源码和合成 PDF 的验收，不更改 v0.16.10 软著冻结包，也不宣称线上已经修复。
+本历史阶段尚未验证：Windows/微信内置浏览器、真实复杂中文 PDF、手机、CI 的 Linux Chromium、线上服务器。9 月 30 日已补 Linux 预装 Chrome CI 验收，见顶部；Windows/微信、手机、真实复杂中文 PDF 与线上服务器仍待验证。软著冻结包未更改，也未部署本批修复。
 
 ## 发布条件与剩余工作
 

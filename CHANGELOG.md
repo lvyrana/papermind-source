@@ -8,6 +8,8 @@
 
 症状：私有仓库首轮 Linux CI 的浏览器启动失败，前面安装、测试、构建和审计均通过。根因：下载版 Chromium 不在 Ubuntu 24.04 现有 AppArmor profile 覆盖路径。修法：CI 固定 Ubuntu 24.04，使用 runner 预装 Chrome 并保留浏览器沙箱，新增防退回护栏及真实本机 HTTP 步骤；不放宽主机安全策略。
 
+验收：独立根提交 `072d5cc` 与修复提交 `ecd7a10` 已推送到私有 `papermind-source`，后者的 [Linux CI](https://github.com/lvyrana/papermind-source/actions/runs/36684651569) 全部通过；后端 85 项、前端 47 项、构建、lint、隔离 HTTP、npm 审计及真实浏览器回归通过。新仓库无旧历史，匿名访问返回 404。未部署；旧仓库可见性与旧密钥撤销仍待作者确认。原开发目录未提交或推送本批改动。
+
 ## 未发布 - 2026-09-28
 
 ### 区分服务商切换与旧凭据撤销
