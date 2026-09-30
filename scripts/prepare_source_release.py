@@ -30,6 +30,7 @@ def prepare(root, target, draft=False):
     if target.exists() or target.is_symlink():
         raise ValueError("Output must be a new directory")
     contents = {}
+    modes = {}
     for name in selected:
         path = root / name
         if path.is_symlink() or not path.is_file():
@@ -40,14 +41,20 @@ def prepare(root, target, draft=False):
         if inspect_file(name, data):
             raise ValueError(f"Source member needs review: {name}")
         contents[name] = data
+        # Keep executable entry points, without carrying writable or special bits.
+        modes[name] = 0o755 if path.stat().st_mode & 0o111 else 0o644
     target.mkdir(parents=True, mode=0o700)
     manifest = {}
     for name, data in contents.items():
         destination = target / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
+        destination.chmod(modes[name])
         manifest[name] = hashlib.sha256(data).hexdigest()
-    (target / "SOURCE-MANIFEST.json").write_text(json.dumps({"draft": draft, "sha256": manifest}, indent=2) + "\n")
+    (target / "SOURCE-MANIFEST.json").write_text(json.dumps({
+        "draft": draft, "sha256": manifest,
+        "mode": {name: format(mode, "04o") for name, mode in modes.items()},
+    }, indent=2) + "\n")
     if draft:
         (target / "NOT-FOR-PUBLICATION.txt").write_text(
             "Private review only. A license file does not authorize publication.\n"

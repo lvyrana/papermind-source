@@ -5,6 +5,12 @@ import fs from 'node:fs'
 const domainConfig = fs.readFileSync(new URL('../../../deploy/nginx-papermind.conf', import.meta.url), 'utf8')
 const ipConfig = fs.readFileSync(new URL('../../../deploy/nginx-papermind-ip.conf', import.meta.url), 'utf8')
 const updateScript = fs.readFileSync(new URL('../../../deploy/update.sh', import.meta.url), 'utf8')
+const setupScript = fs.readFileSync(new URL('../../../deploy/setup.sh', import.meta.url), 'utf8')
+
+test('fresh deployments default to the reviewed source repository', () => {
+  assert.match(setupScript, /PAPERMIND_REPO_URL:-https:\/\/github\.com\/lvyrana\/papermind-source\.git/)
+  assert.doesNotMatch(setupScript, /github\.com\/lvyrana\/papermind\.git/)
+})
 
 test('keeps SPA HTML uncached while hashed assets stay immutable', () => {
   for (const config of [domainConfig, ipConfig]) {

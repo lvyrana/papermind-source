@@ -81,6 +81,8 @@
 
 ### 环境准备
 
+源码验收仓库为 `lvyrana/papermind-source`，当前私有，克隆需 GitHub 账号权限。首次部署脚本已默认指向新仓库；自部署者可用 `PAPERMIND_REPO_URL` 指定自己的授权仓库。不要从旧历史仓库安装来替代本批验收代码。
+
 以下命令均从**本仓库根目录**执行。后端验证环境为 Python 3.12、Linux/macOS；Windows 后端使用 WSL2。前端构建使用 Node.js 22.13 及以上的 22.x 版本，或 Node.js 24 LTS。浏览器用户不需要安装这些环境。安装外部依赖需要网络。
 
 ```bash

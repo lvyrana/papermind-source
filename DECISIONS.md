@@ -10,6 +10,8 @@ PaperMind 的每一个决策都来自"为什么这样做"的思考过程，而�
 
 本次 GitHub 查询发现原 `lvyrana/papermind` 已公开，且一份历史 OpenRouter 配置可以匿名读取；此前称原仓库为私有的假设不成立。新私有仓库只能避免继续带入旧数据，不能收回已经公开的历史。旧仓库可见性另行请求作者确认；供应商撤销状态仍须独立核验，不调用旧密钥来试探。
 
+Linux CI 首轮在下载版 Chromium 启动时被 Ubuntu 24.04 的 AppArmor 用户命名空间限制阻止。保留 `chromiumSandbox: true`，改用 runner 预装、已有系统 profile 的 `/opt/google/chrome/chrome`；不关闭浏览器沙箱或全局 AppArmor 限制。固定 Ubuntu 24.04 以减少环境漂移。依据：[Chromium 官方说明](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md)。
+
 ## 主项目采用 AGPL-3.0-only，保留既有署名（2026-09-28）
 
 作者在 AGPL-3.0 与 MIT 两个选项中选择 A，主项目采用 AGPL-3.0-only。允许商业使用，同时保留分发与修改版网络服务的对应源码义务；不选允许闭源衍生分发的 MIT。根目录保存 GNU 官方许可全文，README 明确仅适用第 3 版，前端包元数据与 CI 许可检查同步。

@@ -24,3 +24,12 @@ test('main project grant and frontend package metadata agree on AGPL-3.0-only', 
   assert.match(readme, /## 许可[\s\S]*主项目原创代码采用[^\n]*AGPL-3\.0-only/)
   assert.match(readme, /\[LICENSE\]\(LICENSE\)/)
 })
+
+test('Linux source CI uses installed Chrome while retaining the browser sandbox', () => {
+  const workflow = read('.github/workflows/checks.yml')
+  const browserTest = read('web/scripts/check-pdf-reader.mjs')
+  assert.match(workflow, /runs-on: ubuntu-24\.04/)
+  assert.match(workflow, /PAPERMIND_CHROMIUM_EXECUTABLE: \/opt\/google\/chrome\/chrome/)
+  assert.match(browserTest, /chromiumSandbox: true/)
+  assert.doesNotMatch(workflow, /--no-sandbox|restrict_unprivileged_userns|chromiumSandbox: false/)
+})

@@ -4,7 +4,7 @@
 set -euo pipefail
 
 PROJECT_DIR="/opt/papermind"
-REPO_URL="${PAPERMIND_REPO_URL:-https://github.com/lvyrana/papermind.git}"
+REPO_URL="${PAPERMIND_REPO_URL:-https://github.com/lvyrana/papermind-source.git}"
 DEPLOY_REF="${DEPLOY_REF:-main}"
 PREVIEW_HOST="${PREVIEW_HOST:-_}"
 AUTH_USER="${PAPERMIND_BASIC_AUTH_USER:-}"

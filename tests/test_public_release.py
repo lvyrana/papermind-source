@@ -64,6 +64,24 @@ class PublicReleaseTests(unittest.TestCase):
                 if draft:
                     self.assertIn("does not authorize publication", (target / "NOT-FOR-PUBLICATION.txt").read_text())
 
+    def test_export_preserves_executable_scripts_without_unsafe_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "scripts").mkdir()
+            script = root / "scripts/example.sh"
+            script.write_text("#!/bin/sh\nexit 0\n")
+            script.chmod(0o777)
+            (root / "README.md").write_text("Synthetic export fixture.\n")
+            target = Path(directory) / "source"
+            prepare(root, target, draft=True)
+            self.assertEqual((target / "scripts/example.sh").stat().st_mode & 0o777, 0o755)
+            self.assertEqual((target / "README.md").stat().st_mode & 0o777, 0o644)
+            manifest = json.loads((target / "SOURCE-MANIFEST.json").read_text())
+            self.assertEqual(manifest["mode"]["scripts/example.sh"], "0755")
+            self.assertEqual(manifest["mode"]["README.md"], "0644")
+
     def test_private_file_paths_are_blocked_but_example_is_allowed(self):
         for name in ("papermind/.env", "web/.env.production", "web/.env.local",
                      "papermind/data/paperdiary.db", "backup.db-wal", "backups/old.gz",

@@ -64,7 +64,7 @@ python3 scripts/backup_data.py restore backups/snapshot-实际名称 --destinati
 
 ## ECS 更新与回退
 
-部署模板固定 `/opt/papermind`、`ubuntu` 服务用户，面向 Ubuntu 24.04。首次安装通过 `PAPERMIND_REPO_URL` 选择自己有权部署的仓库，设置域名及 Basic Auth；新站点默认开启访问口令。配置/运行环境与源码安装在启动前检查。`.env` 必须是权限 600 的普通文件。
+部署模板固定 `/opt/papermind`、`ubuntu` 服务用户，面向 Ubuntu 24.04。首次安装默认源码地址为 `https://github.com/lvyrana/papermind-source.git`，不再从旧历史仓库安装。新仓库目前私有，服务主机需要已授权的 Git 访问方式；也可通过 `PAPERMIND_REPO_URL` 选择自己有权部署的仓库，不能把私有链接当作公众可直接克隆的入口。设置域名及 Basic Auth，新站点默认开启访问口令。配置/运行环境与源码安装在启动前检查。`.env` 必须是权限 600 的普通文件。
 
 后续更新先拒绝脏工作树，再 fetch 并确认可快进；停止服务、做完整备份后才更新代码。按哈希锁文件安装依赖并运行后端回归；前端构建在新目录完成，成功后才换入 `web/dist`，旧构建保留。HTTPS 与既有认证配置不被整文件覆盖。启动后检查 API 和首页；失败保持停机，避免自动重新开放一个未验证版本。
 

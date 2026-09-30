@@ -4,9 +4,10 @@
 
 ## 2026-09-30 私有仓库交接
 
-- 作者已同意新建无旧历史的私有仓库；[`lvyrana/papermind-source`](https://github.com/lvyrana/papermind-source) 已创建，并通过 GitHub API 确认 `PRIVATE`。首轮源码导入与远端 CI 正在验收，尚未公开本批版本。
+- 作者已同意新建无旧历史的私有仓库；[`lvyrana/papermind-source`](https://github.com/lvyrana/papermind-source) 已创建，并通过 GitHub API 确认 `PRIVATE`。独立根提交 `072d5cc` 已推送到 `main`，没有继承旧提交。本地副本位于桌面 `papermind-source`；原开发仓库未提交或推送。尚未公开本批版本。
 - 当前 121 个白名单源码文件已导出，排除 53 个候选项；哈希逐项核对通过，无旧 `.git`、数据库、上传内容或历史截图。图形素材为应用图案；Connector XPI 核对仅含 manifest、bootstrap、SVG 和许可。扩展检查发现的 URL 用户信息仅为拒绝策略的 `example.org` 合成测试。
-- 新副本完成 npm 干净安装、45 项前端测试、构建、lint、84 项隔离后端测试与真实本机 HTTP 检查。安装时 npm 审计为 0；大 chunk 和测试客户端弃用提示保留。浏览器与远端 Linux 检查另记结果。
+- 首次副本完成 npm 干净安装、45 项前端测试、构建、lint、84 项隔离后端测试与真实本机 HTTP 检查；本机 Chrome 153 的 43 页合成 PDF 回归通过。安装时 npm 审计为 0；大 chunk 和测试客户端弃用提示保留。
+- 首轮远端 [CI 36684225658](https://github.com/lvyrana/papermind-source/actions/runs/36684225658) 中，Linux 依赖安装、前后端测试、构建、lint、npm 审计通过，PDF 回归因 Chromium 启动受 AppArmor 限制失败。已调整为 runner 预装 Chrome、保留沙箱；后续结果以实际运行记录为准，不把修好配置等同于 CI 已通过。
 - **旧仓库此前已公开**：GitHub 显示 `lvyrana/papermind` 为 `PUBLIC`，匿名请求确认历史 OpenRouter 配置可读取。此前关于原仓库私有、主项目从未公开的表述不准确。本轮未输出该密钥，也未调用供应商验证它。已请求作者确认是否将旧仓库转为私有；关闭公开访问不能撤回他人已保存的副本，旧密钥撤销仍需处理。
 
 ## 当前结论
