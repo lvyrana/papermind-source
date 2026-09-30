@@ -1,0 +1,43 @@
+# Python
+.venv/
+.venv_new/
+.venv_mcp/
+__pycache__/
+*.pyc
+.env
+.env.bak*
+.env.*
+!.env.example
+*.log
+
+# 软著/投稿等个人申报材料，不进公开仓库
+软著申请/
+
+# Secrets - API keys and user data
+**/data/config.json
+**/data/profile.json
+**/data/paperdiary.db
+*.db
+*.db-shm
+*.db-wal
+
+# 本地备份产物
+backups/
+
+# 独立维护的 Connector 仓库，不打包进主项目
+/papermind-zotero/
+
+# Node
+node_modules/
+dist/
+web/.dist-next.*/
+web/.dist-previous.*/
+
+# OS
+.DS_Store
+.Rhistory
+
+# IDE
+.claude/
+.cc-connect/
+papermind/data/

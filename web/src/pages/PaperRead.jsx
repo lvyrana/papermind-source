@@ -1,0 +1,2373 @@
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
+import { useParams, useLocation, Link, useNavigate } from 'react-router-dom'
+import {
+  ArrowLeft, Sparkles, Send, BookmarkPlus, Bookmark, Loader2,
+  FileText, Download, ExternalLink, Mic, MicOff,
+  ChevronDown, ChevronUp, MessageSquare, Quote as QuoteIcon, X, Layers,
+  GripVertical, PanelLeftClose, PanelLeftOpen, Presentation, MoreHorizontal, Trash2,
+} from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import { apiGet, apiPost, apiDelete, apiPatch, API_BASE, getUserId } from '../api'
+import { useSpeechInput } from '../hooks/useSpeechInput'
+import TourBubble from '../components/TourBubble'
+import PdfViewer from '../components/PdfViewer'
+import CardDrawer from '../components/CardDrawer'
+import SocraticRail from '../components/SocraticRail'
+import BoardDrawer, { BoardRail, BoardSectionPicker } from '../components/BoardDrawer'
+import { CARD_SECTION_MAP, downloadBoard } from '../components/boardUtils'
+import { getSelectionToolbarPosition } from '../utils/selectionToolbar'
+import {
+  buildSelfTestSourceText,
+  getOcrClipboardText,
+  shouldOcrPage,
+} from '../utils/selectionText'
+import { retryAsync } from '../utils/retryAsync'
+
+/* ─────────────────────────────────────────────────────────────
+   PaperRead — 三栏版 (PDF + 记忆通道)
+   ─────────────────────────────────────────────────────────────
+   设计原则：
+   1. 完整保留现有后端契约（/chat、/library、/notes、/translate、/pdf-url、/reading-history、
+      /export/{ris,bibtex}、/projects、/library/<id>/project）
+   2. 三栏：左 (240) TOC + meta + actions / 中 PDF / 右 (420) 记忆通道
+   3. 中栏的 PDF 用 pdfjs-dist 渲染（支持文本选中），无法渲染时降级为「在新标签打开」
+   4. 划词浮窗 → 一键把这段话作为 quote 灌进右栏 chat foot
+   5. 右栏只在已有 quote 时展示「你在这篇里追问过」，避免空占位打断精读
+   6. localStorage 兜底：未收藏的论文也能存 quotes + chat（和原版一致）
+   7. mobile (< 1024px) 退化为单栏 tab，等同老版功能不丢
+
+   依赖：
+   - pdfjs-dist（新装；见 handoff 文档 §2）
+   - 其余全部沿用
+   ───────────────────────────────────────────────────────────── */
+
+// ── helpers ──────────────────────────────────────────────────
+const sliceId = (paper, id) => paper?.pmid || paper?.paper_id || id
+const LEFT_RAIL_STORAGE_KEY = 'paper-read-left-rail'
+const RIGHT_PANEL_STORAGE_KEY = 'paper-read-right-panel-width'
+const RIGHT_PANEL_DEFAULT_WIDTH = 420
+const RIGHT_PANEL_MIN_WIDTH = 340
+const RIGHT_PANEL_MAX_WIDTH = 620
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function getRightPanelMaxWidth() {
+  if (typeof window === 'undefined') return RIGHT_PANEL_MAX_WIDTH
+  return Math.max(RIGHT_PANEL_MIN_WIDTH, Math.min(RIGHT_PANEL_MAX_WIDTH, Math.floor(window.innerWidth * 0.55)))
+}
+
+function getStoredRightPanelWidth() {
+  try {
+    const saved = Number(localStorage.getItem(RIGHT_PANEL_STORAGE_KEY))
+    if (Number.isFinite(saved)) {
+      return clampNumber(saved, RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth())
+    }
+  } catch { /* ignore */ }
+  return RIGHT_PANEL_DEFAULT_WIDTH
+}
+
+// 把 chat 历史里出现过的 user-with-quote 抽出来形成 quote 卡片
+// 兼容旧本地聊天；新数据优先来自后端 /api/quotes/<paper_rowid>
+function deriveQuotesFromHistory(chatMessages) {
+  const quotes = []
+  for (let i = 0; i < chatMessages.length; i++) {
+    const m = chatMessages[i]
+    if (m.role === 'user' && m._quote) {
+      const next = chatMessages[i + 1]
+      quotes.push({
+        id: m._quote.id || `local-${quotes.length + 1}`,
+        n: quotes.length + 1,
+        text: m._quote.text,
+        page: m._quote.page,
+        section: m._quote.section,
+        anchor: m._quote.anchor || {},
+        createdAt: m._quote.createdAt || new Date().toISOString(),
+        question: m.content,
+        answer: next?.role === 'assistant' ? next.content : null,
+        source: 'local_chat',
+      })
+    }
+  }
+  return quotes
+}
+
+function normalizeQuote(raw, index = 0) {
+  const anchor = raw?.anchor && typeof raw.anchor === 'object' ? raw.anchor : {}
+  return {
+    id: raw?.id || `local-${index + 1}`,
+    n: index + 1,
+    text: raw?.text || '',
+    page: raw?.page || anchor.page || null,
+    section: raw?.section || anchor.section || null,
+    anchor,
+    createdAt: raw?.created_at || raw?.createdAt || new Date().toISOString(),
+    question: raw?.question || '',
+    answer: raw?.answer || null,
+    source: raw?.source || 'quote',
+  }
+}
+
+function quoteFingerprint(q) {
+  return `${q.page || ''}|${(q.text || '').slice(0, 180)}|${(q.question || '').slice(0, 120)}`
+}
+
+function ReasonGlyph({ size = 11 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14">
+      <path d="M2 12 C2 8 4 6 7 6" stroke="currentColor" strokeWidth="1" strokeLinecap="round" fill="none"/>
+      <circle cx="7" cy="6" r="2.4" fill="currentColor"/>
+    </svg>
+  )
+}
+
+// ═════════════════════════════════════════════════════════════
+// MAIN
+// ═════════════════════════════════════════════════════════════
+export default function PaperRead() {
+  const { id } = useParams()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const forceLibraryPaper = new URLSearchParams(location.search).get('library') === '1'
+  const [paper, setPaper] = useState(location.state?.paper || null)
+  const [paperLoading, setPaperLoading] = useState(!location.state?.paper)
+
+  // — existing state —
+  const [notes, setNotes] = useState('')
+  const [savedNotes, setSavedNotes] = useState([])       // 后端 paper_notes 全量（含带读/对话总结）
+  const [manualNoteId, setManualNoteId] = useState(null) // 自由笔记对应的后端行 id，避免自动保存重复插行
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  // 自测打开时，语音输入改灌进自测答题框（否则灌进对话输入框）
+  const [selfTestOpen, setSelfTestOpen] = useState(false)
+  const [selfTestPreparing, setSelfTestPreparing] = useState(false)
+  const [selfTestPrepareError, setSelfTestPrepareError] = useState('')
+  const [selfTestPrepareProgress, setSelfTestPrepareProgress] = useState(null)
+  const [speechDraft, setSpeechDraft] = useState('')
+  const selfTestOpenRef = useRef(false)
+  useEffect(() => { selfTestOpenRef.current = selfTestOpen }, [selfTestOpen])
+  const { listening, supported: speechSupported, startListening, stopListening } = useSpeechInput(
+    (text) => {
+      if (selfTestOpenRef.current) setSpeechDraft(text)
+      else setChatInput(prev => prev ? prev + ' ' + text : text)
+    },
+  )
+  const [summarizing, setSummarizing] = useState(false)
+  const [summarized, setSummarized] = useState(false)
+  const [chatSummaryText, setChatSummaryText] = useState('')
+  const [bookmarked, setBookmarked] = useState(false)
+  const [savedRowId, setSavedRowId] = useState(null)
+  const [showExport, setShowExport] = useState(false)
+  const [pdfUrlLoading, setPdfUrlLoading] = useState(false)
+  const [pdfUrl, setPdfUrl] = useState(null)
+  const [pdfOriginalUrl, setPdfOriginalUrl] = useState(null)
+  const [pdfUrlError, setPdfUrlError] = useState(null)
+  const [pdfPageTexts, setPdfPageTexts] = useState({})
+  const [ripple, setRipple] = useState(false)
+  const [summarizeError, setSummarizeError] = useState(null)
+  const [projects, setProjects] = useState([])
+  const [showProjectPicker, setShowProjectPicker] = useState(false)
+  const [deepReadGuide, setDeepReadGuide] = useState('')
+  const [deepReadSource, setDeepReadSource] = useState('')
+  const [deepReadMode, setDeepReadMode] = useState('')
+  const [deepReading, setDeepReading] = useState(false)
+  const [deepReadError, setDeepReadError] = useState('')
+  const [deepReadSaved, setDeepReadSaved] = useState(false)
+
+  // — three-pane new state —
+  const [selection, setSelection] = useState(null)  // {text, page, x, y}
+  const [selectionOcrPending, setSelectionOcrPending] = useState(false)
+  const [selectionOcrError, setSelectionOcrError] = useState('')
+  const [pendingQuote, setPendingQuote] = useState(null)  // quote about to be sent
+  const [currentPage, setCurrentPage] = useState(1)
+  const [chatOpen, setChatOpen] = useState(false)  // V1：对话按需唤出，不常驻右栏
+  const [mobileTab, setMobileTab] = useState('pdf')  // pdf | meta | chat
+  const [structuredQuotes, setStructuredQuotes] = useState([])
+  const [leftRailOpen, setLeftRailOpen] = useState(() => {
+    try { return localStorage.getItem(LEFT_RAIL_STORAGE_KEY) !== 'closed' }
+    catch { return true }
+  })
+  const [rightPanelWidth, setRightPanelWidth] = useState(getStoredRightPanelWidth)
+
+  // — reading cards —
+  const [cards, setCards] = useState([])
+  const [cardSeed, setCardSeed] = useState(null)  // {quote, page, question, answer} → CardDrawer composer
+
+  // — 组会汇报板 —
+  const [board, setBoard] = useState(null)         // {sections, items, whyReading, paperRowid}
+  const [boardOpen, setBoardOpen] = useState(false)
+  const [boardSeed, setBoardSeed] = useState(null) // {content, quote, page, source, defaultSection?} → 板块选单
+  const [boardSending, setBoardSending] = useState(false)
+  const [boardError, setBoardError] = useState('')  // 投递失败/超时的可见原因
+  const [boardExporting, setBoardExporting] = useState(false)
+
+  // — refs —
+  const chatEndRef = useRef(null)
+  const chatInputRef = useRef(null)
+  const readingRecordedRef = useRef(false)
+  const actionRecordedRef = useRef({})
+  const bookmarkBtnRef = useRef(null)
+  const pdfViewerRef = useRef(null)
+  const selectionToolbarRef = useRef(null)
+  const selectionOcrRequestRef = useRef(0)
+  const paperTourStartedRef = useRef(false)
+  const [paperTourStep, setPaperTourStep] = useState(0)
+  const externalLinkRef = useRef(null)
+  const chatFootRef = useRef(null)
+  const projectPickerRef = useRef(null)
+
+  // — derived: quotes for this paper —
+  const quotes = useMemo(() => {
+    const persisted = structuredQuotes.map((q, index) => normalizeQuote(q, index))
+    const seen = new Set(persisted.map(quoteFingerprint))
+    const localOnly = deriveQuotesFromHistory(chatMessages)
+      .map((q, index) => normalizeQuote(q, index + persisted.length))
+      .filter(q => !seen.has(quoteFingerprint(q)))
+    return [...persisted, ...localOnly].map((q, index) => ({ ...q, n: index + 1 }))
+  }, [structuredQuotes, chatMessages])
+  const currentPageText = pdfPageTexts[currentPage] || ''
+  const selfTestSourceText = buildSelfTestSourceText(pdfPageTexts)
+
+  useLayoutEffect(() => {
+    const toolbar = selectionToolbarRef.current
+    if (!selection || !toolbar) return
+
+    const updatePosition = () => {
+      const position = getSelectionToolbarPosition(selection, toolbar.getBoundingClientRect())
+      toolbar.style.left = `${Math.round(position.left)}px`
+      toolbar.style.top = `${Math.round(position.top)}px`
+    }
+    updatePosition()
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updatePosition)
+    resizeObserver?.observe(toolbar)
+    window.addEventListener('resize', updatePosition)
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', updatePosition)
+    }
+  }, [selection])
+
+  useEffect(() => {
+    if (!forceLibraryPaper || !/^\d+$/.test(String(id))) return
+    setSavedRowId(Number(id))
+    setBookmarked(true)
+  }, [forceLibraryPaper, id])
+
+  const handlePdfTextReady = useCallback((pageNum, textContent) => {
+    const text = (textContent?.items || [])
+      .map(item => item.str || '')
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!text) return
+    setPdfPageTexts(prev => prev[pageNum] === text ? prev : { ...prev, [pageNum]: text })
+  }, [])
+
+  const handlePdfSelection = useCallback((nextSelection) => {
+    const requestId = selectionOcrRequestRef.current + 1
+    selectionOcrRequestRef.current = requestId
+    // 用请求号给这次选区盖章：后续只认号，不认对象身份。
+    // 曾用 current === nextSelection 比对，中间任何一次 setSelection
+    // （滚动收起浮窗、重新划选）都会让 === 不成立 → OCR 结果被静默丢弃，
+    // needsOcr 永远留 true → 工具条看着正常却点不动。
+    const stamped = nextSelection ? { ...nextSelection, ocrRequestId: requestId } : nextSelection
+    setSelection(stamped)
+    setSelectionOcrPending(false)
+    setSelectionOcrError('')
+    if (!stamped?.needsOcr) return
+    if (!stamped.selectionImage) {
+      // 拿不到选区图就没法识别：清掉 needsOcr，改用文字层原文，别把用户卡死
+      setSelection(current => current?.ocrRequestId === requestId
+        ? { ...current, needsOcr: false, textSource: 'raw' } : current)
+      setSelectionOcrError('这份 PDF 的文字层不可读，识别不可用，已改用原文。')
+      return
+    }
+
+    setSelectionOcrPending(true)
+    apiPost('/ocr/selection', { image_data_url: stamped.selectionImage })
+      .then((data) => {
+        if (selectionOcrRequestRef.current !== requestId) return
+        if (!data.ok || !data.text?.trim()) {
+          // 识别失败也必须解除标记，否则四个操作被永久锁死（handler 里还有二道守卫）
+          setSelection(current => current?.ocrRequestId === requestId
+            ? { ...current, needsOcr: false, textSource: 'raw' } : current)
+          setSelectionOcrError(data.error || '未能识别这段文字，已改用原文。')
+          return
+        }
+        const text = data.text.trim()
+        setSelection(current => current?.ocrRequestId === requestId ? {
+          ...current,
+          rawText: current.text,
+          text,
+          needsOcr: false,
+          selectionImage: '',
+          textSource: 'ocr',
+          anchor: {
+            ...(current.anchor || {}),
+            textStart: text.slice(0, 120),
+            textEnd: text.slice(-120),
+          },
+        } : current)
+      })
+      .catch(() => {
+        if (selectionOcrRequestRef.current === requestId) {
+          setSelection(current => current?.ocrRequestId === requestId
+            ? { ...current, needsOcr: false, textSource: 'raw' } : current)
+          setSelectionOcrError('文字识别服务暂时不可用，已改用原文。')
+        }
+      })
+      .finally(() => {
+        if (selectionOcrRequestRef.current === requestId) {
+          setSelectionOcrPending(false)
+        }
+      })
+  }, [])
+
+  useEffect(() => {
+    if (selection?.textSource !== 'ocr' || !selection.rawText || !selection.text) return
+    const handleCopy = (event) => {
+      const nativeText = window.getSelection()?.toString() || ''
+      const clipboardText = getOcrClipboardText(nativeText, selection)
+      if (!clipboardText) return
+      event.preventDefault()
+      event.clipboardData?.setData('text/plain', clipboardText)
+    }
+    document.addEventListener('copy', handleCopy)
+    return () => document.removeEventListener('copy', handleCopy)
+  }, [selection])
+
+  const openSelfTest = useCallback(async () => {
+    if (!savedRowId || selfTestPreparing) return
+    setSelfTestPrepareError('')
+    setSelfTestPrepareProgress(null)
+    const preferCjk = /[\u3400-\u9fff\uf900-\ufaff]/.test(paper?.title || '')
+    const totalPages = pdfViewerRef.current?.getNumPages() || 0
+    if (!totalPages) {
+      setSelfTestPrepareError('全文还没加载完成，请稍后再试。')
+      return
+    }
+    if (totalPages > 30) {
+      setSelfTestPrepareError(`这篇 PDF 有 ${totalPages} 页，全文自测暂支持 30 页以内。`)
+      return
+    }
+
+    setSelfTestPreparing(true)
+    try {
+      let cached
+      try {
+        cached = await retryAsync(
+          () => apiGet(`/papers/${savedRowId}/ocr-pages`, { timeoutMs: 10_000 }),
+          { attempts: 3, delayMs: 700 },
+        )
+      } catch {
+        setSelfTestPrepareError('网络连接不稳定，全文缓存读取失败。请稍后重试。')
+        return
+      }
+      if (!cached.ok) {
+        setSelfTestPrepareError(cached.error || '全文缓存读取失败，请稍后重试。')
+        return
+      }
+
+      const nextTexts = { ...pdfPageTexts }
+      const cachedPageNumbers = new Set()
+      for (const page of cached.pages || []) {
+        if (page.page_number && page.text?.trim()) {
+          nextTexts[page.page_number] = page.text.trim()
+          cachedPageNumbers.add(Number(page.page_number))
+        }
+      }
+
+      const missingPages = Array.from({ length: totalPages }, (_, index) => index + 1)
+        .filter(page => (
+          !cachedPageNumbers.has(page)
+          && shouldOcrPage(nextTexts[page] || '', { preferCjk })
+        ))
+      setSelfTestPrepareProgress({ done: 0, total: missingPages.length })
+
+      for (let index = 0; index < missingPages.length; index += 1) {
+        const pageNumber = missingPages[index]
+        let pageImage = ''
+        for (let attempt = 0; attempt < 20 && !pageImage; attempt += 1) {
+          pageImage = pdfViewerRef.current?.capturePageImage(pageNumber) || ''
+          if (!pageImage) await new Promise(resolve => window.setTimeout(resolve, 150))
+        }
+        if (!pageImage) {
+          setSelfTestPrepareError(`第 ${pageNumber} 页还没加载完成，请稍后重试。`)
+          return
+        }
+        let data
+        try {
+          data = await apiPost('/ocr/selection', {
+            image_data_url: pageImage,
+            scope: 'page',
+            paper_rowid: savedRowId,
+            page_number: pageNumber,
+          }, { timeoutMs: 150_000 })
+        } catch {
+          setSelfTestPrepareError(
+            `第 ${pageNumber} 页识别时网络连接中断。已完成页面会保留，请重试。`,
+          )
+          return
+        }
+        if (!data.ok || !data.text?.trim()) {
+          setSelfTestPrepareError(data.error || `第 ${pageNumber} 页识别失败，请稍后重试。`)
+          return
+        }
+        nextTexts[pageNumber] = data.text.trim()
+        setPdfPageTexts({ ...nextTexts })
+        setSelfTestPrepareProgress({ done: index + 1, total: missingPages.length })
+      }
+
+      setPdfPageTexts(nextTexts)
+      setSelfTestOpen(true)
+    } catch {
+      setSelfTestPrepareError('全文识别服务暂时不可用。已完成页面会保留，下次只补缺页。')
+    } finally {
+      setSelfTestPreparing(false)
+    }
+  }, [paper?.title, pdfPageTexts, savedRowId, selfTestPreparing])
+
+  // ── load paper: 推荐缓存 → last-reading → 收藏库（Zotero 等外部深链冷打开） ──
+  useEffect(() => {
+    if (paper) { setPaperLoading(false); return }
+    const loadFromLibrary = async () => {
+      if (!/^\d+$/.test(String(id))) return false
+      try {
+        const data = await apiGet(`/library/${id}`)
+        if (!data.paper) return false
+        setPaper(data.paper)
+        setSavedRowId(Number(id))
+        setBookmarked(true)
+        try {
+          localStorage.setItem(`paper-bookmark-${sliceId(data.paper, id)}`, String(id))
+        } catch { /* ignore */ }
+        return true
+      } catch { return false }
+    }
+    if (forceLibraryPaper) {
+      loadFromLibrary().finally(() => setPaperLoading(false))
+      return
+    }
+    apiGet(`/papers/${id}`)
+      .then(async data => {
+        if (data.paper) { setPaper(data.paper); return }
+        const last = localStorage.getItem('last-reading')
+        if (last) {
+          const parsed = JSON.parse(last)
+          if (String(parsed.index) === String(id)) { setPaper(parsed); return }
+        }
+        await loadFromLibrary()
+      })
+      .catch(() => loadFromLibrary())
+      .finally(() => setPaperLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, forceLibraryPaper])
+
+  // ── engagement tracking (unchanged) ──
+  const recordEngagement = useCallback((reason) => {
+    if (!paper?.title) return Promise.resolve()
+    return apiPost('/reading-history', {
+      title: paper.title,
+      paper_rowid: savedRowId || 0,
+      reason,
+    }).catch(() => {})
+  }, [paper, savedRowId])
+
+  const recordActionOnce = (key) => {
+    if (actionRecordedRef.current[key]) return
+    actionRecordedRef.current[key] = true
+    recordEngagement(key)
+  }
+
+  // 20s dwell
+  useEffect(() => {
+    if (!paper) return
+    localStorage.setItem('last-reading', JSON.stringify({
+      ...paper, index: id, readAt: new Date().toISOString(),
+    }))
+    readingRecordedRef.current = false
+    actionRecordedRef.current = {}
+    const timer = setTimeout(() => {
+      if (readingRecordedRef.current) return
+      readingRecordedRef.current = true
+      recordEngagement('dwell_20s')
+    }, 20000)
+    return () => clearTimeout(timer)
+  }, [paper, id, recordEngagement])
+
+  // ── notes + bookmark + chat restore (unchanged from v1) ──
+  useEffect(() => {
+    const _id = sliceId(paper, id)
+    const saved = localStorage.getItem(`paper-notes-${_id}`)
+    if (saved) setNotes(saved)
+    const bk = localStorage.getItem(`paper-bookmark-${_id}`)
+    if (bk) { setBookmarked(true); setSavedRowId(parseInt(bk)) }
+    const chatKey = `paper-chat-${_id}`
+    const savedChat = localStorage.getItem(chatKey)
+    if (savedChat) {
+      try { setChatMessages(JSON.parse(savedChat)) } catch { /* ignore */ }
+    }
+  }, [paper, id])
+
+  useEffect(() => {
+    apiGet('/projects').then(data => setProjects(data.projects || [])).catch(() => {})
+  }, [])
+
+  // ── 汇报板：加载 / 投递 / 导出 ──
+  const refreshBoard = useCallback((rowId) => {
+    const rid = rowId || savedRowId
+    if (!rid) return
+    apiGet(`/board/${rid}`)
+      .then(d => {
+        if (!d.ok) return
+        setBoard({ sections: d.sections, items: d.items, whyReading: d.why_reading, paperRowid: rid })
+      })
+      .catch(() => {})
+  }, [savedRowId])
+
+  useEffect(() => {
+    if (!savedRowId) return
+    apiGet(`/library/${savedRowId}`)
+      .then(data => {
+        if (data.chats?.length) setChatMessages(data.chats)
+        const list = data.notes || []
+        setSavedNotes(list)
+        // 自由笔记只认 source=manual 的最新一条；
+        // 原来取 notes[0]（任意来源最新），保存带读笔记后会把带读内容灌进自由笔记框
+        const manual = list.find(n => (n.source || 'manual') === 'manual')
+        if (manual) { setManualNoteId(manual.id); setNotes(manual.content) }
+        if (list.some(n => (n.source || 'manual') !== 'manual')) setNotesOpen(true)
+      })
+      .catch(() => {})
+    apiGet(`/cards/${savedRowId}`)
+      .then(data => setCards(data.cards || []))
+      .catch(() => {})
+    apiGet(`/quotes/${savedRowId}`)
+      .then(data => setStructuredQuotes(data.quotes || []))
+      .catch(() => {})
+    refreshBoard(savedRowId)
+  }, [refreshBoard, savedRowId])
+
+  // 各入口（划词/带读/卡片/对话）调用：塞 seed → 弹板块选单
+  // 未收藏时先自动收藏（board 惰性创建依赖 rowId），选单等 board 加载后出现
+  const sendToBoard = async (seed) => {
+    setBoardError('')
+    setBoardSeed(seed)
+    if (!board) {
+      const rowId = await ensureSaved()
+      if (rowId) refreshBoard(rowId)
+      else setBoardSeed(null)
+    }
+  }
+
+  const closeBoardPicker = () => {
+    setBoardError('')
+    setBoardSeed(null)
+  }
+
+  // 投递必须有超时：无超时的裸 fetch 一旦被网络卡住就永远转圈，
+  // 用户既看不到原因也无法重试（boardSending 会把后续点击全部吞掉）
+  const BOARD_SEND_TIMEOUT_MS = 30_000
+
+  const pickBoardSection = async (sectionKey) => {
+    if (!boardSeed || boardSending) return
+    setBoardSending(true)
+    setBoardError('')
+    try {
+      const rowId = await ensureSaved()
+      if (!rowId) {
+        setBoardError('这篇论文还没能收藏成功，请稍后重试。')
+        return
+      }
+      let ok = false
+      let failReason = ''
+      if (boardSeed.imageBlob) {
+        // 图表截图走 multipart，后端存图 + 建 source=figure 条目
+        const fd = new FormData()
+        fd.append('file', boardSeed.imageBlob, 'figure.png')
+        fd.append('section', sectionKey)
+        if (boardSeed.page) fd.append('page', String(boardSeed.page))
+        const controller = new AbortController()
+        const timer = window.setTimeout(() => controller.abort(), BOARD_SEND_TIMEOUT_MS)
+        let d
+        try {
+          const res = await fetch(`${API_BASE}/board/${rowId}/figures`, {
+            method: 'POST', headers: { 'X-User-ID': getUserId() }, body: fd,
+            signal: controller.signal,
+          })
+          if (!res.ok) throw new Error(`API error: ${res.status}`)
+          d = await res.json()
+        } finally {
+          window.clearTimeout(timer)
+        }
+        ok = d?.ok
+        failReason = d?.error || ''
+      } else {
+        const d = await apiPost(`/board/${rowId}/items`, {
+          section: sectionKey,
+          content: (boardSeed.content || '').slice(0, 8000),
+          quote: (boardSeed.quote || '').slice(0, 4000),
+          page: boardSeed.page ?? null,
+          source: boardSeed.source || 'manual',
+        }, { timeoutMs: BOARD_SEND_TIMEOUT_MS })
+        ok = d?.ok
+        failReason = d?.error || ''
+      }
+      if (ok) {
+        if (boardSeed.imageUrl) URL.revokeObjectURL(boardSeed.imageUrl)
+        setBoardSeed(null)
+        refreshBoard(rowId)
+      } else {
+        setBoardError(failReason || '投递失败，请重试。')
+      }
+    } catch (e) {
+      setBoardError(e?.name === 'AbortError'
+        ? '投递超时，可能是网络不稳定。请重试。'
+        : '投递失败，请检查网络后重试。')
+    }
+    finally { setBoardSending(false) }
+  }
+
+  // ── PDF 框选截图 → 送到汇报 ──
+  const handleSnip = ({ blob, page, url }) => {
+    sendToBoard({
+      imageBlob: blob,
+      imageUrl: url,
+      content: `图表（P.${page}）`,
+      page,
+      source: 'figure',
+    })
+  }
+
+  const exportBoard = async (format = 'pptx') => {
+    if (!board?.paperRowid || boardExporting) return
+    setBoardExporting(true)
+    try { await downloadBoard(board.paperRowid, paper?.title, format) } catch { /* ignore */ }
+    setBoardExporting(false)
+  }
+
+  // notes autosave
+  useEffect(() => {
+    if (!paper || !notes) return
+    const key = `paper-notes-${sliceId(paper, id)}`
+    localStorage.setItem(key, notes)
+    const lastReading = JSON.parse(localStorage.getItem('last-reading') || '{}')
+    if (lastReading.index === id) {
+      lastReading.note = notes.slice(0, 60)
+      localStorage.setItem('last-reading', JSON.stringify(lastReading))
+    }
+    if (savedRowId) {
+      const timer = setTimeout(() => {
+        // 带 note_id 走 UPDATE；不带的话后端每次 INSERT 新行，编辑几次就积一堆重复笔记
+        // 注意 note_id 为空时必须整个省略：显式传 null 会被 pydantic 拒（int 字段不收 null）
+        apiPost('/notes', { paper_rowid: savedRowId, content: notes, ...(manualNoteId ? { note_id: manualNoteId } : {}) })
+          .then(d => { if (d?.ok && d.id && d.id !== manualNoteId) setManualNoteId(d.id) })
+          .catch(() => {})
+      }, 1500)
+      return () => clearTimeout(timer)
+    }
+  }, [notes, paper, id, savedRowId, manualNoteId])
+
+  // chat autosave (localStorage)
+  useEffect(() => {
+    if (!paper || chatMessages.length === 0) return
+    const chatKey = `paper-chat-${sliceId(paper, id)}`
+    localStorage.setItem(chatKey, JSON.stringify(chatMessages))
+  }, [chatMessages, paper, id])
+
+  // scroll chat to end
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages, chatOpen])
+
+  // ── PDF URL fetch (uploaded local PDF first, then OA lookup by doi/pmid) ──
+  useEffect(() => {
+    if (!paper || pdfUrl) return
+    let cancelled = false
+    const run = async () => {
+      // 已上传的本地 PDF 优先
+      if (savedRowId) {
+        const localUrl = `${API_BASE}/library/${savedRowId}/pdf`
+        try {
+          const r = await fetch(localUrl, { method: 'HEAD' })
+          if (r.ok && !cancelled) {
+            setPdfUrlLoading(false)
+            setPdfUrlError(null)
+            setPdfUrl(localUrl)
+            setPdfOriginalUrl(localUrl)
+            return
+          }
+        } catch { /* ignore */ }
+      }
+      if (!paper.doi && !paper.pmid && !paper.pmcid) {
+        if (!cancelled) setPdfUrlLoading(false)
+        return
+      }
+      if (cancelled) return
+      setPdfUrlLoading(true)
+      const params = new URLSearchParams()
+      if (paper.doi) params.set('doi', paper.doi)
+      if (paper.pmid) params.set('pmid', paper.pmid)
+      if (paper.pmcid) params.set('pmcid', paper.pmcid)
+      apiGet(`/pdf-url?${params}`)
+        .then(data => {
+          if (cancelled) return
+          if (data.ok && data.url) {
+            setPdfUrl(data.url)
+            setPdfOriginalUrl(data.original_url || data.url)
+          } else {
+            setPdfUrlError(data.error || '未找到免费全文')
+          }
+        })
+        .catch(() => { if (!cancelled) setPdfUrlError('查询失败') })
+        .finally(() => { if (!cancelled) setPdfUrlLoading(false) })
+    }
+    run()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paper, savedRowId])
+
+  // ── upload local PDF ──
+  const [uploadingPdf, setUploadingPdf] = useState(false)
+  const handleUploadPdf = async (file) => {
+    if (!file || uploadingPdf) return
+    setUploadingPdf(true)
+    try {
+      const rowId = await ensureSaved()
+      if (!rowId) return
+      const form = new FormData()
+      form.append('file', file)
+      const resp = await fetch(`${API_BASE}/library/${rowId}/pdf`, {
+        method: 'POST',
+        headers: { 'X-User-ID': getUserId() },
+        body: form,
+      })
+      const data = await resp.json()
+      if (data.ok) {
+        const localUrl = `${API_BASE}/library/${rowId}/pdf`
+        setPdfUrlLoading(false)
+        setPdfUrl(localUrl)
+        setPdfOriginalUrl(localUrl)
+        setPdfUrlError(null)
+      } else {
+        setPdfUrlError(data.detail || '上传失败，请确认是 PDF 文件')
+      }
+    } catch { setPdfUrlError('上传失败，请重试') }
+    finally { setUploadingPdf(false) }
+  }
+
+  // ── tour (unchanged) ──
+  useEffect(() => {
+    if (!paper || paperTourStartedRef.current) return
+    if (localStorage.getItem('pm-paper-tour-done')) return
+    paperTourStartedRef.current = true
+    const t = setTimeout(() => {
+      localStorage.setItem('pm-paper-tour-done', '1')
+      setPaperTourStep(1)
+    }, 1000)
+    return () => clearTimeout(t)
+  }, [paper])
+
+  function advancePaperTour() {
+    if (paperTourStep >= 3) {
+      localStorage.setItem('pm-paper-tour-done', '1')
+      setPaperTourStep(0)
+    } else setPaperTourStep(s => s + 1)
+  }
+
+  const triggerRipple = () => {
+    setRipple(true); setTimeout(() => setRipple(false), 700)
+  }
+
+  // ── bookmark flow (unchanged) ──
+  const saveToProject = async (projectId) => {
+    setShowProjectPicker(false)
+    try {
+      const data = await apiPost('/library/save', { paper, chats: chatMessages })
+      const nextRowId = data.id
+      setSavedRowId(nextRowId)
+      if (String(nextRowId) !== String(id)) {
+        setPdfUrl(null)
+        setPdfOriginalUrl(null)
+        setPdfUrlError(null)
+        setPdfUrlLoading(true)
+        navigate(`/paper/${nextRowId}?library=1`, { replace: true, state: { paper } })
+      }
+      localStorage.setItem(`paper-bookmark-${sliceId(paper, nextRowId)}`, String(nextRowId))
+      setBookmarked(true)
+      triggerRipple()
+      if (projectId !== null) {
+        apiPatch(`/library/${nextRowId}/project`, { project_id: projectId }).catch(() => {})
+      }
+      if (notes) {
+        apiPost('/notes', { paper_rowid: nextRowId, content: notes })
+          .then(d => { if (d?.ok && d.id) setManualNoteId(d.id) })
+          .catch(() => {})
+      }
+    } catch { /* ignore */ }
+  }
+
+  const toggleBookmark = async () => {
+    if (!paper) return
+    if (bookmarked && savedRowId) {
+      await apiDelete(`/library/${savedRowId}`).catch(() => {})
+      localStorage.removeItem(`paper-bookmark-${sliceId(paper, id)}`)
+      setBookmarked(false); setSavedRowId(null)
+      setStructuredQuotes([])
+    } else {
+      if (projects.length > 0) {
+        setShowProjectPicker(true)
+        setTimeout(() => projectPickerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50)
+      } else {
+        await saveToProject(null)
+      }
+    }
+  }
+
+
+  // ── selection bubble → save as reading card ──
+  const saveSelectionAsCard = () => {
+    if (!selection) return
+    setCardSeed({ quote: selection.text, page: selection.page })
+    persistStructuredQuote({
+      text: selection.text,
+      page: selection.page,
+      anchor: selection.anchor || {},
+      createdAt: new Date().toISOString(),
+    }, { source: 'card_seed' }).catch(() => {})
+    setSelection(null)
+    window.getSelection()?.removeAllRanges()
+    setMobileTab('chat')
+  }
+
+  // ── selection bubble → 送到汇报（板块选单在 pickBoardSection 落库） ──
+  const sendSelectionToBoard = () => {
+    if (!selection) return
+    sendToBoard({
+      content: selection.text,
+      quote: selection.text,
+      page: selection.page,
+      source: 'selection',
+    })
+    setSelection(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
+  // ── 带读结果 → 送到汇报 ──
+  const sendDeepReadToBoard = () => {
+    if (!deepReadGuide) return
+    sendToBoard({
+      content: deepReadGuide,
+      quote: deepReadSource || '',
+      page: deepReadMode === 'page' ? currentPage : null,
+      source: 'deep_read',
+    })
+  }
+
+  // ── AI 回复 → 送到汇报 ──
+  const sendChatToBoard = (idx) => {
+    const m = chatMessages[idx]
+    if (!m || m.role !== 'assistant') return
+    sendToBoard({ content: m.content, source: 'chat' })
+  }
+
+  // ── 删除结构化 quote：卡片消失 + PDF 高亮同步擦除（highlights 由 quotes 派生） ──
+  const deleteStructuredQuote = async (q) => {
+    if (!q?.id || String(q.id).startsWith('local-')) return
+    const d = await apiDelete(`/quotes/${q.id}`).catch(() => null)
+    if (d?.ok) setStructuredQuotes(prev => prev.filter(x => x.id !== q.id))
+  }
+
+  // ── 卡片 → 入汇报（卡片类型 → 板块默认映射，可在选单改投） ──
+  const sendCardToBoard = (card) => {
+    sendToBoard({
+      content: card.title ? `${card.title}\n${card.content}` : card.content,
+      quote: card.quote || '',
+      page: card.page ?? null,
+      source: 'card',
+      defaultSection: CARD_SECTION_MAP[card.card_type],
+    })
+  }
+
+  const deepReadSelection = () => {
+    if (!selection) return
+    const selected = selection
+    // 顺带把这段挂进对话待引用：用户读完拆解若想自己追问，
+    // 直接在对话里打字即可，不必再回来点一次（原「问 papermind」的能力）
+    setPendingQuote({
+      text: selected.text,
+      page: selected.page,
+      anchor: selected.anchor || {},
+      section: null,
+      createdAt: new Date().toISOString(),
+    })
+    setSelection(null)
+    window.getSelection()?.removeAllRanges()
+    setMobileTab('chat')
+    persistStructuredQuote({
+      text: selected.text,
+      page: selected.page,
+      anchor: selected.anchor || {},
+      createdAt: new Date().toISOString(),
+    }, { source: 'deep_read', question: '精读这段' }).catch(() => {})
+    runDeepRead('selection', selected.text, selected.page)
+  }
+
+  // ── chat message → seed a card (归卡) ──
+  // 清空对话：聊过的东西有时只是随手一问，用户应当能删掉它
+  const clearChat = async () => {
+    if (chatMessages.length === 0) return
+    if (!confirm('清空这篇论文的全部对话记录？不可撤销。')) return
+    setChatMessages([])
+    setPendingQuote(null)
+    setSummarized(false)
+    setChatSummaryText('')
+    try { localStorage.removeItem(`paper-chat-${sliceId(paper, id)}`) } catch { /* ignore */ }
+    if (savedRowId) await apiDelete(`/chat/${savedRowId}`).catch(() => {})
+  }
+
+  // 自测「不确定 · 转到对话」：带上下文过去，用户不必自己切、自己重述
+  const handoffToChat = (prompt, chip) => {
+    setChatMessages(prev => [...prev, { role: 'assistant', content: prompt }])
+    setChatInput(chip || '')
+    setSelfTestOpen(false)
+    setChatOpen(true)
+    setMobileTab('chat')
+    setTimeout(() => chatInputRef.current?.focus(), 120)
+  }
+
+  // 自测里「站住了」的回答 → 沉成卡片（用自己的话说明白的，是质量最高的卡片）
+  const makeCardFromSelfTest = (turn) => {
+    const myAnswer = turn?._myAnswer || ''
+    setCardSeed({
+      quote: turn?.anchor_quote || '',
+      page: turn?.anchor_page || null,
+      question: '',
+      answer: myAnswer,
+    })
+    setSelfTestOpen(false)
+  }
+
+  const seedCardFromChat = (idx) => {
+    const m = chatMessages[idx]
+    if (!m || m.role !== 'assistant') return
+    const prev = chatMessages[idx - 1]
+    setCardSeed({
+      quote: prev?._quote?.text || '',
+      page: prev?._quote?.page || null,
+      question: prev?.role === 'user' ? prev.content : '',
+      answer: m.content,
+    })
+    setMobileTab('chat')
+  }
+
+  // ── ensure paper is saved (cards must attach to a saved paper) ──
+  const ensureSaved = async () => {
+    if (savedRowId) return savedRowId
+    if (!paper) return null
+    try {
+      const data = await apiPost('/library/save', { paper, chats: chatMessages })
+      setSavedRowId(data.id)
+      localStorage.setItem(`paper-bookmark-${sliceId(paper, id)}`, String(data.id))
+      setBookmarked(true)
+      return data.id
+    } catch { return null }
+  }
+
+  const upsertStructuredQuote = (quote) => {
+    if (!quote?.id) return
+    setStructuredQuotes(prev => {
+      const normalized = normalizeQuote(quote)
+      const exists = prev.some(q => String(q.id) === String(normalized.id))
+      if (exists) return prev.map(q => String(q.id) === String(normalized.id) ? normalized : q)
+      return [...prev, normalized]
+    })
+  }
+
+  const persistStructuredQuote = async (quote, extras = {}) => {
+    if (!quote?.text) return null
+    const rowId = await ensureSaved()
+    if (!rowId) return null
+    try {
+      const data = await apiPost('/quotes', {
+        paper_rowid: rowId,
+        text: quote.text,
+        page: quote.page || null,
+        section: quote.section || null,
+        anchor: quote.anchor || {},
+        question: extras.question || quote.question || '',
+        answer: extras.answer || quote.answer || '',
+        source: extras.source || quote.source || 'quote',
+      })
+      if (data?.ok && data.quote) {
+        upsertStructuredQuote(data.quote)
+        return data.quote
+      }
+    } catch { /* ignore */ }
+    return null
+  }
+
+  const runDeepRead = async (mode = 'page', textOverride = '', pageOverride = null) => {
+    if (!paper || deepReading) return
+    setDeepReading(true)
+    setDeepReadError('')
+    setDeepReadSaved(false)
+    setDeepReadMode(mode)
+    try {
+      const sourceText = textOverride || (mode === 'page' ? currentPageText : '')
+      const pageForRequest = pageOverride || currentPage
+      const data = await apiPost('/deep-read/guide', {
+        paper_title: paper.title || '',
+        paper_abstract: paper.abstract || '',
+        page: pageForRequest,
+        page_text: sourceText,
+        mode,
+      })
+      if (data.ok) {
+        setDeepReadGuide(data.guide || '')
+        setDeepReadSource(data.source || formatDeepReadSource(mode, pageForRequest))
+      } else {
+        setDeepReadError(data.error || '精读生成失败，请稍后重试。')
+      }
+    } catch {
+      setDeepReadError('网络错误，请稍后重试。')
+    } finally {
+      setDeepReading(false)
+    }
+  }
+
+  const saveDeepReadAsNote = async () => {
+    if (!deepReadGuide || deepReadSaved) return
+    const rowId = await ensureSaved()
+    if (!rowId) {
+      setDeepReadError('自动收藏失败，请先手动收藏这篇论文。')
+      return
+    }
+    try {
+      const title = deepReadSource ? `【精读带读】${deepReadSource}` : '【精读带读】'
+      const data = await apiPost('/notes', {
+        paper_rowid: rowId,
+        content: `${title}\n\n${deepReadGuide}`,
+        source: 'deep_read',
+      })
+      if (data.ok) {
+        setDeepReadSaved(true)
+        refreshSavedNotes(rowId)
+        setNotesOpen(true)
+      }
+      else setDeepReadError(data.error || '保存失败，请稍后重试。')
+    } catch {
+      setDeepReadError('保存失败，请稍后重试。')
+    }
+  }
+
+  const refreshSavedNotes = (rowId) => {
+    apiGet(`/notes/${rowId || savedRowId}`)
+      .then(d => setSavedNotes(d.notes || []))
+      .catch(() => {})
+  }
+
+  const deleteSavedNote = async (noteId) => {
+    const d = await apiDelete(`/notes/${noteId}`).catch(() => null)
+    if (d?.ok) setSavedNotes(prev => prev.filter(n => n.id !== noteId))
+  }
+
+  const jumpToPage = (p) => {
+    if (p && pdfViewerRef.current) pdfViewerRef.current.goToPage(p)
+  }
+
+  // ── send chat (extended: attach pendingQuote if present) ──
+  const handleSendChat = async () => {
+    if (!chatInput.trim() || chatLoading) return
+    const userMsg = {
+      role: 'user',
+      content: chatInput,
+      ...(pendingQuote ? { _quote: pendingQuote } : {}),
+    }
+    setChatMessages(prev => [...prev, userMsg])
+    const sentQuote = pendingQuote
+    setChatInput('')
+    setPendingQuote(null)
+    setChatLoading(true)
+
+    try {
+      const contextPage = sentQuote?.page || currentPage
+      const contextText = (pdfPageTexts[contextPage] || currentPageText || '').slice(0, 10000)
+      const rowIdForChat = sentQuote ? (savedRowId || await ensureSaved()) : (savedRowId || 0)
+      const data = await apiPost('/chat', {
+        paper_title: paper?.title || '',
+        paper_abstract: paper?.abstract || '',
+        message: chatInput,
+        history: chatMessages,
+        paper_rowid: rowIdForChat || 0,
+        current_page: contextPage,
+        current_page_text: contextText,
+        // 全篇已提取的页文字：只给当前页的话，图在一页、表在另一页时
+        // AI 物理上无法交叉核对（实测正是它漏掉 AUC 矛盾的原因）
+        paper_pages: buildPaperPagesPayload(pdfPageTexts, contextPage),
+        quote: sentQuote
+          ? {
+              text: sentQuote.text,
+              page: sentQuote.page || null,
+              section: sentQuote.section || null,
+              anchor: sentQuote.anchor || {},
+              created_at: sentQuote.createdAt || null,
+            }
+          : null,
+      })
+      if (data.quote) upsertStructuredQuote(data.quote)
+      setChatMessages(prev => [...prev, { role: 'assistant', content: data.reply }])
+    } catch {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: '连接失败，请重试。' }])
+    } finally {
+      setChatLoading(false)
+      setSummarized(false)
+      setChatSummaryText('')
+    }
+  }
+
+  // ── summarize chat (unchanged) ──
+  const handleSummarizeChat = async () => {
+    if (chatMessages.length < 2 || summarizing) return
+    setSummarizeError(null)
+    let rowId = savedRowId
+    if (!rowId && paper) {
+      try {
+        const data = await apiPost('/library/save', { paper, chats: chatMessages })
+        rowId = data.id
+        setSavedRowId(rowId)
+        localStorage.setItem(`paper-bookmark-${sliceId(paper, id)}`, String(rowId))
+        setBookmarked(true)
+      } catch {
+        setSummarizeError('自动收藏失败，请先手动收藏这篇论文。')
+        return
+      }
+    }
+    setSummarizing(true)
+    try {
+      const data = await apiPost('/chat/summarize', {
+        paper_title: paper?.title || '',
+        paper_rowid: rowId,
+        messages: chatMessages,
+      })
+      if (data.ok) {
+        setSummarized(true); triggerRipple(); refreshSavedNotes(rowId); setNotesOpen(true)
+        // 存下正文：对话总结此前只能进笔记，没有任何入口进汇报板
+        setChatSummaryText(String(data.note || data.summary || data.content || '').trim())
+      }
+      else setSummarizeError(data.error || '总结失败，请重试。')
+    } catch { setSummarizeError('网络错误，请重试。') }
+    finally { setSummarizing(false) }
+  }
+
+  // 对话总结 → 汇报板：读出来的判断本该能直接进汇报，不该止步于笔记
+  const sendChatSummaryToBoard = () => {
+    if (!chatSummaryText) return
+    sendToBoard({ content: chatSummaryText, source: 'chat' })
+  }
+
+  // ── export (unchanged) ──
+  const handleExport = async (format) => {
+    recordActionOnce(`export_${format}`)
+    if (savedRowId) {
+      window.open(`${API_BASE}/export/${format}/${savedRowId}`, '_blank')
+    } else {
+      const resp = await fetch(`${API_BASE}/export/${format}-direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-ID': getUserId() },
+        body: JSON.stringify({ paper }),
+      })
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `paper.${format === 'bibtex' ? 'bib' : 'ris'}`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+    setShowExport(false)
+  }
+
+  // ── jump to quote ──
+  const jumpToQuote = (q) => {
+    if (!q?.page || !pdfViewerRef.current) return
+    if (pdfViewerRef.current.highlightQuote) pdfViewerRef.current.highlightQuote(q)
+    else pdfViewerRef.current.goToPage(q.page)
+  }
+
+  const toggleLeftRail = useCallback(() => {
+    setLeftRailOpen(prev => {
+      const next = !prev
+      try { localStorage.setItem(LEFT_RAIL_STORAGE_KEY, next ? 'open' : 'closed') } catch { /* ignore */ }
+      return next
+    })
+  }, [])
+
+  const persistRightPanelWidth = useCallback((width) => {
+    const next = clampNumber(width, RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth())
+    try { localStorage.setItem(RIGHT_PANEL_STORAGE_KEY, String(next)) } catch { /* ignore */ }
+    return next
+  }, [])
+
+  const startRightPanelResize = useCallback((event) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = rightPanelWidth
+    let latestWidth = startWidth
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onPointerMove = (moveEvent) => {
+      const delta = startX - moveEvent.clientX
+      latestWidth = clampNumber(startWidth + delta, RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth())
+      setRightPanelWidth(latestWidth)
+    }
+    const stopResize = () => {
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+      persistRightPanelWidth(latestWidth)
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', stopResize)
+      window.removeEventListener('pointercancel', stopResize)
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', stopResize)
+    window.addEventListener('pointercancel', stopResize)
+  }, [persistRightPanelWidth, rightPanelWidth])
+
+  const handleRightPanelResizeKey = useCallback((event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    setRightPanelWidth(prev => persistRightPanelWidth(prev + (event.key === 'ArrowLeft' ? 24 : -24)))
+  }, [persistRightPanelWidth])
+
+  // ── loading states ──
+  if (paperLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 size={24} className="text-coral animate-spin"/>
+      </div>
+    )
+  }
+  if (!paper) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-center">
+        <div>
+          <p className="text-warm-gray mb-4">论文数据未找到</p>
+          <Link to="/" className="text-coral text-sm">返回首页</Link>
+        </div>
+      </div>
+    )
+  }
+
+
+  // ════════════════════════════════════════════════════════════
+  // RENDER
+  // ════════════════════════════════════════════════════════════
+  return (
+    <div className="h-screen overflow-hidden bg-cream text-navy flex flex-col">
+
+      {/* ─── slim topbar (重用 Navbar 风格但更窄) ─── */}
+      <div className="flex items-center justify-between px-7 h-[54px] border-b border-cream-dark/60 bg-cream/90 backdrop-blur shrink-0 z-50">
+        <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-warm-gray hover:text-navy transition-colors">
+          <ArrowLeft size={14}/> <span>返回首页</span>
+        </Link>
+        <div className="flex items-center gap-3 font-mono text-[10.5px] tracking-widest uppercase text-warm-gray/70">
+          {paper.pmid && <span>PMID {paper.pmid}</span>}
+          {pdfUrl && <span className="text-mint-deep">PDF 已加载</span>}
+          {pdfUrlError && <span className="text-coral/70">无免费全文</span>}
+        </div>
+      </div>
+
+      {/* ─── 3-pane main ─── */}
+      <div
+        className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[var(--left-rail-width)_minmax(0,1fr)_10px_var(--right-panel-width)] transition-[grid-template-columns] duration-200 ease-out"
+        style={{
+          '--left-rail-width': leftRailOpen ? '240px' : '0px',
+          '--right-panel-width': `${rightPanelWidth}px`,
+        }}>
+
+        {/* ───── LEFT RAIL (hidden on mobile, optionally on tablet) ───── */}
+        <aside
+          aria-hidden={!leftRailOpen}
+          className={`hidden lg:flex flex-col bg-warm-white/55 overflow-y-auto transition-[opacity,padding,border-color] duration-200 ease-out ${
+            leftRailOpen
+              ? 'border-r border-navy/5 px-5 py-5 opacity-100'
+              : 'border-r-0 px-0 py-0 opacity-0 pointer-events-none'
+          }`}>
+          {leftRailOpen && (
+            <RailContent
+              paper={paper}
+              bookmarked={bookmarked}
+              onToggleBookmark={toggleBookmark}
+              bookmarkBtnRef={bookmarkBtnRef}
+              ripple={ripple}
+              externalLinkRef={externalLinkRef}
+              onExport={handleExport}
+              showExport={showExport}
+              setShowExport={setShowExport}
+              recordActionOnce={recordActionOnce}
+              currentPage={currentPage}
+            />
+          )}
+        </aside>
+
+        {/* ───── MIDDLE PDF ───── */}
+        <main className="min-w-0 flex flex-col overflow-hidden">
+          {/* mobile tab switcher (只在 lg 以下出现) */}
+          <div className="lg:hidden flex gap-1 px-3 py-1.5 border-b border-cream-dark/40 bg-warm-white shrink-0">
+            {[
+              { v: 'pdf', label: 'PDF' },
+              { v: 'meta', label: '元信息' },
+              { v: 'chat', label: '精读' },
+            ].map(t => (
+              <button key={t.v}
+                onClick={() => setMobileTab(t.v)}
+                className={`px-3 py-1 rounded-full text-xs ${mobileTab === t.v ? 'bg-navy text-warm-white' : 'text-warm-gray'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* PDF area */}
+          <div className={`flex-1 min-h-0 relative ${mobileTab === 'pdf' ? '' : 'hidden lg:block'}`}>
+            {pdfUrlLoading && (
+              <div className="absolute inset-0 flex items-center justify-center text-warm-gray text-sm gap-2 pointer-events-none">
+                <Loader2 size={16} className="animate-spin text-coral"/>
+                寻找 PDF 全文...
+              </div>
+            )}
+            {!pdfUrlLoading && pdfUrl && (
+              <PdfViewer
+                ref={pdfViewerRef}
+                url={pdfUrl}
+                originalUrl={pdfOriginalUrl}
+                onSelection={handlePdfSelection}
+                onSnip={handleSnip}
+                onPageChange={setCurrentPage}
+                onTextReady={handlePdfTextReady}
+                onUploadLocalPdf={handleUploadPdf}
+                uploadingLocalPdf={uploadingPdf}
+                highlights={quotes}
+                preferChineseText={/[\u3400-\u9fff\uf900-\ufaff]/.test(paper?.title || '')}
+                sectionHint={null}
+                headerLeft={
+                  <button
+                    type="button"
+                    onClick={toggleLeftRail}
+                    aria-expanded={leftRailOpen}
+                    aria-label={leftRailOpen ? '收起左侧面板' : '展开左侧面板'}
+                    className="hidden lg:inline-flex h-7 w-7 items-center justify-center rounded-md border border-navy/10 bg-warm-white/70 text-warm-gray shadow-[0_1px_2px_rgba(30,58,95,.05)] hover:bg-warm-white hover:text-navy hover:border-navy/25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-coral/40 transition-colors">
+                    {leftRailOpen ? <PanelLeftClose size={15}/> : <PanelLeftOpen size={15}/>}
+                  </button>
+                }
+                headerRight={
+                  quotes.length > 0 && (
+                    <span className="font-mono text-[10px] tracking-wider uppercase">
+                      <span className="text-coral">{quotes.length} quotes</span> on this paper
+                    </span>
+                  )
+                }
+              />
+            )}
+            {!pdfUrlLoading && !pdfUrl && (
+              <NoPdfState paper={paper} error={pdfUrlError} onUpload={handleUploadPdf} uploading={uploadingPdf}/>
+            )}
+
+            {/* selection bubble — fixed 定位吃 PdfViewer 给的视口坐标，
+                滚动后坐标不再错位（PdfViewer 会在滚动时收起浮窗） */}
+            {selection && (
+              <div
+                ref={selectionToolbarRef}
+                role="toolbar"
+                aria-label="选中文字操作"
+                className="fixed z-50 grid max-w-[calc(100vw-24px)] grid-cols-2 items-center gap-0.5 rounded-xl border border-navy/10 bg-warm-white/95 p-1 shadow-[0_10px_30px_-12px_rgba(30,58,95,.38)] backdrop-blur-md sm:flex"
+                style={getSelectionToolbarPosition(selection)}>
+                {/* OCR 只增强不阻断：四个操作任何时候都能点，识别成功只是把文字换成更准的版本。
+                    别再用 disabled 关它们——识别一失败就会永久锁死（needsOcr 不会自己清）。 */}
+                {(selectionOcrPending || selectionOcrError) && (
+                  <span className={`col-span-2 flex items-center gap-1.5 whitespace-nowrap px-2 py-1 text-[11px] sm:col-auto ${
+                    selectionOcrError ? 'text-warm-gray' : 'text-navy/70'
+                  }`}
+                    title={selectionOcrError || ''}>
+                    {selectionOcrPending
+                      ? <><Loader2 size={11} className="animate-spin text-coral"/>识别中</>
+                      : (
+                        <button
+                          type="button"
+                          onClick={() => handlePdfSelection(selection)}
+                          className="rounded-md px-1.5 py-0.5 text-warm-gray hover:bg-coral/10 hover:text-coral transition-colors">
+                          用原文 · 重试识别
+                        </button>
+                      )}
+                  </span>
+                )}
+                {(
+                  <>
+                    {/* 原有「问 papermind」与「精读这段」重复：都是针对这段问 AI，
+                        区别只是前者要用户自己打字。合并为「精读这段」（直接给拆解），
+                        想自己提问的场景已由对话抽屉覆盖。 */}
+                    <button
+                      onClick={deepReadSelection}
+                      className="flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-navy px-2.5 py-1.5 text-xs font-medium text-warm-white hover:bg-navy-light transition-colors">
+                      <Sparkles size={13}/>
+                      精读这段
+                    </button>
+                    <button
+                      onClick={saveSelectionAsCard}
+                      className="flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-coral px-2.5 py-1.5 text-xs font-medium text-warm-white hover:bg-coral-deep transition-colors">
+                      <Layers size={13}/>
+                      存为卡片
+                    </button>
+                    <button
+                      onClick={sendSelectionToBoard}
+                      className="flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium text-navy hover:bg-mint/20 hover:text-mint-deep transition-colors">
+                      <Presentation size={13}/>
+                      送到汇报
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* mobile-only meta tab */}
+          <div className={`flex-1 min-h-0 overflow-y-auto p-5 lg:hidden ${mobileTab === 'meta' ? '' : 'hidden'}`}>
+            <RailContent
+              paper={paper}
+              bookmarked={bookmarked}
+              onToggleBookmark={toggleBookmark}
+              bookmarkBtnRef={bookmarkBtnRef}
+              ripple={ripple}
+              externalLinkRef={externalLinkRef}
+              onExport={handleExport}
+              showExport={showExport}
+              setShowExport={setShowExport}
+              recordActionOnce={recordActionOnce}
+              currentPage={currentPage}
+            />
+          </div>
+        </main>
+
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整右侧面板宽度"
+          tabIndex={0}
+          onPointerDown={startRightPanelResize}
+          onKeyDown={handleRightPanelResizeKey}
+          className="hidden lg:flex cursor-col-resize touch-none items-center justify-center bg-cream transition-colors group focus-visible:outline focus-visible:outline-2 focus-visible:outline-coral/35">
+          <div className="h-full w-px bg-navy/8 group-hover:bg-coral/30 group-focus-visible:bg-coral/35 transition-colors"/>
+          <div className="absolute flex h-8 w-5 items-center justify-center rounded-md bg-cream text-warm-gray/45 opacity-0 shadow-[0_2px_10px_rgba(30,58,95,.10)] ring-1 ring-navy/8 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+            <GripVertical size={13}/>
+          </div>
+        </div>
+
+        {/* ───── RIGHT MEMORY CHANNEL ───── */}
+        <aside className={`border-l border-navy/5 bg-cream flex flex-col overflow-hidden lg:border-l-0 lg:flex ${mobileTab === 'chat' ? 'flex' : 'hidden lg:flex'}`}>
+          <MemoryChannel
+            paper={paper}
+            quotes={quotes}
+            chatMessages={chatMessages}
+            chatLoading={chatLoading}
+            chatInput={chatInput}
+            setChatInput={setChatInput}
+            handleSendChat={handleSendChat}
+            handleSummarizeChat={handleSummarizeChat}
+            summarizing={summarizing}
+            summarized={summarized}
+            summarizeError={summarizeError}
+            speechSupported={speechSupported}
+            listening={listening}
+            startListening={startListening}
+            stopListening={stopListening}
+            pendingQuote={pendingQuote}
+            setPendingQuote={setPendingQuote}
+            chatOpen={chatOpen}
+            setChatOpen={setChatOpen}
+            chatEndRef={chatEndRef}
+            chatInputRef={chatInputRef}
+            chatFootRef={chatFootRef}
+            jumpToQuote={jumpToQuote}
+            // reading cards
+            cards={cards}
+            setCards={setCards}
+            ensureSaved={ensureSaved}
+            cardSeed={cardSeed}
+            setCardSeed={setCardSeed}
+            seedCardFromChat={seedCardFromChat}
+            jumpToPage={jumpToPage}
+            currentPage={currentPage}
+            currentPageText={currentPageText}
+            selfTestSourceText={selfTestSourceText}
+            deepReadGuide={deepReadGuide}
+            deepReadSource={deepReadSource}
+            deepReadMode={deepReadMode}
+            deepReading={deepReading}
+            deepReadError={deepReadError}
+            deepReadSaved={deepReadSaved}
+            onRunDeepRead={runDeepRead}
+            onSaveDeepRead={saveDeepReadAsNote}
+            onSendDeepReadToBoard={sendDeepReadToBoard}
+            onSendChatToBoard={sendChatToBoard}
+            onSendCardToBoard={sendCardToBoard}
+            onDeleteQuote={deleteStructuredQuote}
+            // bookmark + project picker passthrough
+            bookmarked={bookmarked}
+            onToggleBookmark={toggleBookmark}
+            projects={projects}
+            showProjectPicker={showProjectPicker}
+            setShowProjectPicker={setShowProjectPicker}
+            projectPickerRef={projectPickerRef}
+            saveToProject={saveToProject}
+            notes={notes}
+            setNotes={setNotes}
+            savedNotes={savedNotes}
+            manualNoteId={manualNoteId}
+            onDeleteNote={deleteSavedNote}
+            notesOpen={notesOpen}
+            setNotesOpen={setNotesOpen}
+            savedRowId={savedRowId}
+            onClearChat={clearChat}
+            onDismissDeepRead={() => { setDeepReadGuide(''); setDeepReadSource(''); setDeepReadError('') }}
+            onSendChatSummaryToBoard={sendChatSummaryToBoard}
+            selfTestOpen={selfTestOpen}
+            selfTestPreparing={selfTestPreparing}
+            selfTestPrepareError={selfTestPrepareError}
+            selfTestPrepareProgress={selfTestPrepareProgress}
+            onOpenSelfTest={openSelfTest}
+            onCloseSelfTest={() => setSelfTestOpen(false)}
+            onHandoffToChat={handoffToChat}
+            onMakeCardFromSelfTest={makeCardFromSelfTest}
+            speechDraft={speechDraft}
+            onClearSpeechDraft={() => setSpeechDraft('')}
+            board={board}
+            onOpenBoard={() => setBoardOpen(true)}
+            onExportBoard={exportBoard}
+            boardExporting={boardExporting}
+          />
+        </aside>
+      </div>
+
+      {/* ─── 组会汇报板：全览抽屉 + 板块选单 ─── */}
+      <BoardDrawer
+        paper={paper}
+        board={board}
+        open={boardOpen}
+        onClose={() => setBoardOpen(false)}
+        onRefresh={() => refreshBoard()}
+        onJumpToPage={jumpToPage}
+      />
+      <BoardSectionPicker
+        board={board}
+        seed={boardSeed}
+        onPick={pickBoardSection}
+        onCancel={closeBoardPicker}
+        sending={boardSending}
+        error={boardError}
+      />
+
+      {/* ─── tour ─── */}
+      {paperTourStep === 1 && <TourBubble targetRef={bookmarkBtnRef} text="点击收藏，笔记和对话都会永久保存" step={1} total={3} placement="bottom" onNext={advancePaperTour}/>}
+      {paperTourStep === 2 && externalLinkRef.current && <TourBubble targetRef={externalLinkRef} text="跳转到 PubMed 查看原文" step={2} total={3} placement="bottom" onNext={advancePaperTour}/>}
+      {paperTourStep === 3 && <TourBubble targetRef={chatFootRef} text="划选 PDF 里的句子 → 这里会带着引用追问；对话会自动归档" step={3} total={3} placement="top" onNext={advancePaperTour}/>}
+    </div>
+  )
+}
+
+// ═════════════════════════════════════════════════════════════
+// RAIL (left)
+// ═════════════════════════════════════════════════════════════
+function RailContent({
+  paper, bookmarked, onToggleBookmark, bookmarkBtnRef, ripple,
+  externalLinkRef, onExport, showExport, setShowExport, recordActionOnce,
+  currentPage,
+}) {
+  // TODO(backend): real TOC from pdfjs outline (pdf.getOutline()) — 这里先用静态映射
+  // 让 PdfViewer 在 onLoad 时 emit outline 给父，再传进来。Stage 1 用 page-based fallback。
+  return (
+    <>
+      <p className="font-mono text-[10px] tracking-widest uppercase text-warm-gray/70 mb-3">paper</p>
+
+      {/* 分类 + source */}
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-[11px] px-2 py-0.5 rounded-full bg-coral/10 text-coral font-medium">
+          {paper.category || '未分类'}
+        </span>
+        {paper.source && (
+          <span className="text-[10px] text-warm-gray/60">
+            {paper.source === 'pubmed'
+              ? 'PubMed'
+              : paper.source === 'zotero'
+                ? 'Zotero'
+                : 'Semantic Scholar'}
+          </span>
+        )}
+      </div>
+
+      {/* 标题（紧凑） */}
+      <h2 className="text-[15px] font-medium leading-snug mb-2 text-navy">
+        {paper.title}
+      </h2>
+      <p className="text-xs text-warm-gray/70 mb-5 leading-relaxed">
+        {paper.authors}
+      </p>
+
+      {/* metadata */}
+      <h4 className="font-mono text-[10px] tracking-widest uppercase text-warm-gray/70 mb-2">Metadata</h4>
+      <dl className="text-xs space-y-2 mb-5">
+        <div>
+          <dt className="text-warm-gray/60 mb-0.5">Journal</dt>
+          <dd className="text-navy/80">{paper.journal || '—'}</dd>
+        </div>
+        <div>
+          <dt className="text-warm-gray/60 mb-0.5">Published</dt>
+          <dd className="text-navy/80">{paper.pub_date || '—'}</dd>
+        </div>
+        {paper.doi && (
+          <div>
+            <dt className="text-warm-gray/60 mb-0.5">DOI</dt>
+            <dd className="font-mono text-[11px] text-navy/80 break-all">{paper.doi}</dd>
+          </div>
+        )}
+      </dl>
+
+      {paper.abstract && (
+        <details className="group mb-5 border-y border-navy/5 py-3">
+          <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
+            <span className="font-mono text-[10px] tracking-widest uppercase text-warm-gray/70">Abstract</span>
+            <ChevronDown size={12} className="text-warm-gray/60 transition-transform group-open:rotate-180"/>
+          </summary>
+          <p className="mt-2 max-h-52 overflow-y-auto pr-1 text-xs leading-relaxed text-navy/72">
+            {paper.abstract}
+          </p>
+        </details>
+      )}
+
+      {/* actions */}
+      <h4 className="font-mono text-[10px] tracking-widest uppercase text-warm-gray/70 mb-2">Actions</h4>
+      <div className="flex flex-col gap-1.5">
+        <button
+          ref={bookmarkBtnRef}
+          onClick={onToggleBookmark}
+          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs border transition-all ripple-btn ${ripple ? 'ripple-active' : ''} ${
+            bookmarked
+              ? 'bg-coral/8 border-coral/30 text-coral-deep'
+              : 'bg-warm-white border-navy/10 text-warm-gray hover:text-navy hover:border-navy/25'
+          }`}>
+          {bookmarked
+            ? <><Bookmark size={12} className="fill-current"/> 已收藏</>
+            : <><BookmarkPlus size={12}/> 收藏到 papermind</>}
+        </button>
+
+        {paper.link && (
+          <a ref={externalLinkRef} href={paper.link} target="_blank" rel="noreferrer"
+            onClick={() => recordActionOnce('open_external')}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs border bg-warm-white border-navy/10 text-warm-gray hover:text-navy hover:border-navy/25">
+            <ExternalLink size={12}/> 在 PubMed 打开
+          </a>
+        )}
+
+        <div className="relative">
+          <button onClick={() => setShowExport(!showExport)}
+            className="w-full inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs border bg-warm-white border-navy/10 text-warm-gray hover:text-navy hover:border-navy/25">
+            <FileText size={12}/> 引用 (BibTeX / RIS)
+          </button>
+          {showExport && (
+            <div className="absolute left-0 right-0 mt-1 bg-white rounded-xl shadow-lg border border-cream-dark/50 py-1 z-20">
+              <button onClick={() => onExport('ris')} className="w-full text-left px-3 py-1.5 text-xs text-navy hover:bg-cream-dark/30">RIS (Zotero/EndNote)</button>
+              <button onClick={() => onExport('bibtex')} className="w-full text-left px-3 py-1.5 text-xs text-navy hover:bg-cream-dark/30">BibTeX (LaTeX)</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 你正在看 p.N (poor man's TOC sync) */}
+      <div className="mt-6 pt-4 border-t border-navy/5">
+        <p className="font-mono text-[10px] tracking-widest uppercase text-warm-gray/70 mb-1">Reading</p>
+        <p className="text-xs text-navy/70">你正在看 <span className="font-mono text-coral">p.{currentPage}</span></p>
+      </div>
+    </>
+  )
+}
+
+// ═════════════════════════════════════════════════════════════
+// MEMORY CHANNEL (right)
+// ═════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
+   右栏 V1 · 主线纵览
+   顶栏（精读沉淀 + 对话入口）→ 折叠带读 → 卡片流(flex-1)
+   → 自测入口 → 钉底汇报板；对话/元操作按需唤出，不常驻占轨。
+   ═══════════════════════════════════════════════════════════════ */
+function MemoryChannel(props) {
+  const {
+    paper, quotes, chatMessages, chatLoading, chatInput, setChatInput,
+    handleSendChat, handleSummarizeChat, summarizing, summarized, summarizeError,
+    speechSupported, listening, startListening, stopListening,
+    pendingQuote, setPendingQuote, chatOpen, setChatOpen,
+    chatEndRef, chatInputRef, chatFootRef, jumpToQuote,
+    bookmarked, onToggleBookmark, projects, showProjectPicker, setShowProjectPicker,
+    projectPickerRef, saveToProject,
+    notes, setNotes,
+    savedNotes, manualNoteId, onDeleteNote, notesOpen, setNotesOpen,
+    cards, setCards, ensureSaved, cardSeed, setCardSeed,
+    jumpToPage,
+    currentPage, currentPageText, selfTestSourceText, deepReadGuide, deepReadSource,
+    deepReadMode, deepReading, deepReadError, deepReadSaved, onRunDeepRead, onSaveDeepRead,
+    board, onOpenBoard, onExportBoard, boardExporting,
+    onSendDeepReadToBoard, onSendCardToBoard, onDeleteQuote, onDismissDeepRead,
+    onSendChatSummaryToBoard,
+    savedRowId, selfTestOpen, onOpenSelfTest, onCloseSelfTest, onClearChat,
+    selfTestPreparing, selfTestPrepareError, selfTestPrepareProgress,
+    onHandoffToChat, onMakeCardFromSelfTest,
+    speechDraft, onClearSpeechDraft,
+  } = props
+
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+
+  return (
+    <div className="flex flex-col h-full min-h-0 relative">
+
+      {/* ── 顶栏：精读沉淀 · 对话 · 溢出菜单 ── */}
+      <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-cream-dark/60">
+        <span className="text-[13px] font-serif text-navy">精读沉淀</span>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setChatOpen(true)}
+            className="inline-flex items-center gap-1.5 text-[11px] text-warm-gray hover:text-navy border border-cream-dark rounded-full px-2.5 py-1 transition">
+            <MessageSquare size={11}/>
+            对话{chatMessages.length > 0 ? ` · ${chatMessages.length}` : ''}
+          </button>
+          <div className="relative" ref={projectPickerRef}>
+            <button
+              onClick={() => { setMoreOpen(o => !o); setShowProjectPicker(false) }}
+              className="w-7 h-7 rounded-full text-warm-gray hover:text-navy hover:bg-cream-dark/40 transition flex items-center justify-center"
+              aria-label="更多">
+              <MoreHorizontal size={14}/>
+            </button>
+            {moreOpen && (
+              <div className="absolute right-0 top-8 z-30 w-44 rounded-xl border border-cream-dark bg-warm-white shadow-lg py-1.5">
+                <button
+                  onClick={() => { onToggleBookmark(); setMoreOpen(false) }}
+                  className="w-full text-left px-3 py-1.5 text-[12px] text-navy/80 hover:bg-cream-dark/30 flex items-center gap-2">
+                  <Bookmark size={11} className={bookmarked ? 'text-coral' : ''}/>
+                  {bookmarked ? '已收藏' : '收藏这篇'}
+                </button>
+                {projects.length > 0 && (
+                  <button
+                    onClick={() => { setShowProjectPicker(true); setMoreOpen(false) }}
+                    className="w-full text-left px-3 py-1.5 text-[12px] text-navy/80 hover:bg-cream-dark/30 flex items-center gap-2">
+                    <Layers size={11}/> 归入项目
+                  </button>
+                )}
+                <button
+                  onClick={() => { const next = !notesOpen; setNotesOpen(next); if (next) setGuideOpen(false); setMoreOpen(false) }}
+                  className="w-full text-left px-3 py-1.5 text-[12px] text-navy/80 hover:bg-cream-dark/30 flex items-center gap-2">
+                  <FileText size={11}/> 自由笔记{savedNotes.length > 0 ? ` · ${savedNotes.length}` : ''}
+                </button>
+              </div>
+            )}
+            {showProjectPicker && (
+              <div className="absolute right-0 top-8 z-30 w-52 rounded-xl border border-cream-dark bg-warm-white shadow-lg p-2.5">
+                <p className="text-[10px] text-warm-gray/70 mb-1.5 m-0">收藏到</p>
+                <div className="flex flex-wrap gap-1.5">
+                  <button onClick={() => { saveToProject(null); setShowProjectPicker(false) }}
+                    className="px-2 py-1 text-[11px] rounded-lg border border-cream-dark text-warm-gray hover:text-navy">
+                    直接收藏
+                  </button>
+                  {projects.map(p => (
+                    <button key={p.id} onClick={() => { saveToProject(p.id); setShowProjectPicker(false) }}
+                      className="px-2 py-1 text-[11px] rounded-lg bg-coral/5 border border-coral/25 text-coral hover:bg-coral/10">
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── 怎么读这篇（带读，默认收起）── */}
+      <div className="shrink-0 border-b border-cream-dark/50">
+        <button
+          onClick={() => { const next = !guideOpen; setGuideOpen(next); if (next) setNotesOpen(false) }}
+          className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-cream-dark/20 transition">
+          <span className="flex items-center gap-2 text-[12px] text-navy/75">
+            <Sparkles size={12} className="text-coral"/> 怎么读这篇
+          </span>
+          <ChevronDown size={12} className={`text-warm-gray/60 transition-transform ${guideOpen ? 'rotate-180' : ''}`}/>
+        </button>
+        {guideOpen && (
+          <DeepReadPanel
+            paper={paper}
+            currentPage={currentPage}
+            currentPageText={currentPageText}
+            guide={deepReadGuide}
+            source={deepReadSource}
+            mode={deepReadMode}
+            loading={deepReading}
+            error={deepReadError}
+            saved={deepReadSaved}
+            onRun={onRunDeepRead}
+            onSave={onSaveDeepRead}
+            onSendToBoard={onSendDeepReadToBoard}
+            onDismiss={onDismissDeepRead}
+            variant="rail"
+          />
+        )}
+      </div>
+
+      {/* ── 未收藏提示（轻量，一行）── */}
+      {!bookmarked && (
+        <div className="shrink-0 px-4 py-2 border-b border-cream-dark/50 bg-navy/[0.02] flex items-center justify-between gap-2">
+          <p className="text-[11px] text-warm-gray m-0">收藏后笔记和对话永久保存</p>
+          <button onClick={onToggleBookmark} className="text-[11px] text-coral font-medium hover:underline shrink-0">收藏</button>
+        </div>
+      )}
+
+      {/* ── 沉淀区：卡片流（主体，自身滚动）── */}
+      <CardDrawer
+        paper={paper}
+        cards={cards}
+        setCards={setCards}
+        ensureSaved={ensureSaved}
+        seed={cardSeed}
+        clearSeed={() => setCardSeed(null)}
+        onJumpToPage={jumpToPage}
+        onSendToBoard={onSendCardToBoard}
+        variant="rail"
+      />
+
+      {/* ── 自由笔记（从溢出菜单唤出，默认收起）── */}
+      {notesOpen && (
+        <div className="shrink-0 max-h-[38%] overflow-y-auto px-4 py-3 border-t border-cream-dark/50 bg-cream/60">
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-mono text-[10px] tracking-widest uppercase text-warm-gray/70">自由笔记</span>
+            <button onClick={() => setNotesOpen(false)} className="text-warm-gray/60 hover:text-navy"><X size={12}/></button>
+          </div>
+          {savedNotes.filter(n => n.id !== manualNoteId).map(n => (
+            <SavedNoteItem key={n.id} note={n} onDelete={() => onDeleteNote(n.id)}/>
+          ))}
+          <textarea
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="读完这篇，你想记下什么？"
+            className="mt-2 w-full bg-warm-white rounded-lg px-3 py-2 text-[13px] text-navy border border-navy/10 outline-none resize-none focus:border-coral/40 focus:ring-2 focus:ring-coral/10 leading-relaxed min-h-[100px]"/>
+          {notes && (
+            <p className="text-[10.5px] text-warm-gray/60 mt-1 italic">
+              {bookmarked ? '已自动保存到收藏' : '已保存到本地；收藏后永久'}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ── 引用与追问（有内容才出现，收在底部之上）── */}
+      {quotes.length > 0 && (
+        <div className="shrink-0 max-h-[30%] overflow-y-auto px-4 py-2.5 border-t border-cream-dark/50">
+          <SectionHeader
+            left={<><QuoteIcon size={11}/> 引用与追问</>}
+            right={`${quotes.length} 段`}
+            accent="coral"/>
+          {quotes.map(q => (
+            <QuoteCard key={q.n} quote={q} onJump={() => jumpToQuote(q)}
+              onDelete={!String(q.id).startsWith('local-') ? () => onDeleteQuote(q) : null}/>
+          ))}
+        </div>
+      )}
+
+      {/* ── 自测入口 ── */}
+      <div className="shrink-0 px-4 pb-3 pt-2">
+        <button
+          type="button"
+          onClick={onOpenSelfTest}
+          disabled={!savedRowId || selfTestPreparing}
+          title={savedRowId ? '' : '收藏这篇后即可自测'}
+          className="group w-full text-left bg-warm-white border border-cream-dark/60 rounded-2xl px-3.5 py-3 flex items-center gap-3 hover:border-coral/50 hover:shadow-sm transition disabled:opacity-55 disabled:cursor-not-allowed">
+          <span className="w-8 h-8 rounded-xl bg-coral/10 text-coral flex items-center justify-center text-[15px] shrink-0">?</span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[12.5px] font-medium text-navy leading-tight m-0">
+              {selfTestPreparing
+                ? `正在读取全文${selfTestPrepareProgress?.total
+                  ? ` ${selfTestPrepareProgress.done}/${selfTestPrepareProgress.total}`
+                  : '…'}`
+                : '让 papermind 考考你'}
+            </p>
+            <p className="text-[10.5px] text-warm-gray/70 mt-0.5 m-0">
+              {selfTestPrepareError || `苏格拉底式追问 · 基于全文与 ${cards.length} 张卡片`}
+            </p>
+          </div>
+          <span className="text-[11px] text-coral opacity-0 group-hover:opacity-100 transition shrink-0">开始 →</span>
+        </button>
+      </div>
+
+      {/* ── 汇报板（钉底）── */}
+      <div className="shrink-0">
+        <BoardRail
+          board={board}
+          onOpen={onOpenBoard}
+          onExport={onExportBoard}
+          exporting={boardExporting}
+          variant="rail"
+        />
+      </div>
+
+      {/* ── 苏格拉底自测（覆盖右栏；内嵌而非全屏，方便随时翻原文对照）── */}
+      {selfTestOpen && (
+        <div className="absolute inset-0 z-40 bg-cream">
+          <SocraticRail
+            paper={paper}
+            paperRowid={savedRowId}
+            currentPage={currentPage}
+            currentPageText={selfTestSourceText}
+            onExit={() => onCloseSelfTest()}
+            onJumpToPage={jumpToPage}
+            onHandoffToChat={onHandoffToChat}
+            onMakeCard={onMakeCardFromSelfTest}
+            speechSupported={speechSupported}
+            listening={listening}
+            startListening={startListening}
+            stopListening={stopListening}
+            speechDraft={speechDraft}
+            clearSpeechDraft={onClearSpeechDraft}
+          />
+        </div>
+      )}
+
+      {/* ── 对话抽屉（按需唤出，覆盖右栏）── */}
+      {chatOpen && (
+        <div className="absolute inset-0 z-40 flex flex-col bg-cream">
+          <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-cream-dark/60">
+            <span className="inline-flex items-center gap-2 text-[13px] font-serif text-navy">
+              <MessageSquare size={13} className="text-coral"/>
+              {pendingQuote ? '继续这段追问' : '对话'}
+              {chatMessages.length > 0 && (
+                <span className="font-mono text-[10px] text-warm-gray/70">{chatMessages.length} 条</span>
+              )}
+            </span>
+            <div className="flex items-center gap-1">
+              {chatMessages.length > 0 && (
+                <button onClick={onClearChat}
+                  className="w-7 h-7 rounded-full text-warm-gray hover:text-coral hover:bg-cream-dark/40 flex items-center justify-center transition"
+                  title="清空对话记录"
+                  aria-label="清空对话记录">
+                  <Trash2 size={13}/>
+                </button>
+              )}
+              <button onClick={() => setChatOpen(false)}
+                className="w-7 h-7 rounded-full text-warm-gray hover:text-navy hover:bg-cream-dark/40 flex items-center justify-center transition"
+                aria-label="关闭对话">
+                <X size={14}/>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-2">
+            {chatMessages.length === 0 && (
+              <p className="text-[12px] text-warm-gray/70 text-center py-8 leading-relaxed">
+                在左侧 PDF 里划一段话来追问，<br/>或直接在下面提问。
+              </p>
+            )}
+            {chatMessages.map((m, i) => (
+              <div key={i} className={`text-[13px] px-3.5 py-2.5 rounded-xl leading-[1.75] ${
+                m.role === 'user' ? 'bg-navy text-warm-white ml-6' : 'bg-warm-white text-navy/85 mr-6 border border-navy/5'
+              }`}>
+                {m._quote && (
+                  <p className="font-mono text-[9.5px] tracking-widest uppercase opacity-70 mb-1">
+                    ↳ 引用 p.{m._quote.page}
+                  </p>
+                )}
+                {/* AI 回复是 markdown：纯文本直出会吞掉换行和列表，把回答压成一堵墙 */}
+                {m.role === 'user' ? (
+                  <span className="whitespace-pre-wrap">{m.content}</span>
+                ) : (
+                  <ReactMarkdown components={{
+                    p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                    strong: ({ children }) => <strong className="font-semibold text-navy">{children}</strong>,
+                    ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 my-2">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 my-2">{children}</ol>,
+                    li: ({ children }) => <li className="pl-0.5">{children}</li>,
+                    h1: ({ children }) => <p className="font-semibold text-navy mt-2 mb-1 first:mt-0">{children}</p>,
+                    h2: ({ children }) => <p className="font-semibold text-navy mt-2 mb-1 first:mt-0">{children}</p>,
+                    h3: ({ children }) => <p className="font-semibold text-navy mt-2 mb-1 first:mt-0">{children}</p>,
+                  }}>{m.content}</ReactMarkdown>
+                )}
+              </div>
+            ))}
+            {chatLoading && (
+              <div className="flex items-center gap-2 text-[12px] text-warm-gray mr-6">
+                <Loader2 size={12} className="animate-spin text-coral"/> 正在回答…
+              </div>
+            )}
+            <div ref={chatEndRef}/>
+          </div>
+
+          <div ref={chatFootRef} className="shrink-0 border-t border-cream-dark/60 px-4 py-3 bg-cream">
+            {pendingQuote && (
+              <div className="mb-2 bg-coral/[0.07] border-l-2 border-coral pl-2.5 pr-2 py-1.5 rounded-r-lg flex items-start gap-2">
+                <p className="flex-1 italic text-[11.5px] leading-snug text-navy/70 m-0">
+                  &ldquo;{pendingQuote.text?.length > 120 ? pendingQuote.text.slice(0, 120) + '…' : pendingQuote.text}&rdquo;
+                </p>
+                <button onClick={() => setPendingQuote(null)} className="text-warm-gray/60 hover:text-navy shrink-0">
+                  <X size={11}/>
+                </button>
+              </div>
+            )}
+
+            {chatMessages.length >= 2 && (
+              <>
+                <button onClick={handleSummarizeChat} disabled={summarizing || summarized}
+                  className={`w-full py-1.5 rounded-lg text-[11px] font-medium mb-2 flex items-center justify-center gap-1.5 transition-all ${
+                    summarized ? 'bg-mint/20 text-navy' : 'border border-coral/25 text-coral hover:bg-coral/5'
+                  } disabled:opacity-60`}>
+                  {summarizing ? <><Loader2 size={11} className="animate-spin"/>正在总结…</>
+                    : summarized ? <><FileText size={11}/>已保存到笔记</>
+                    : <><FileText size={11}/>把这段对话存为笔记</>}
+                </button>
+                {/* 总结此前只能进笔记，进不了汇报板——读出来的判断本该能直接用于汇报 */}
+                {summarized && onSendChatSummaryToBoard && (
+                  <button onClick={onSendChatSummaryToBoard}
+                    className="w-full py-1.5 rounded-lg text-[11px] font-medium mb-2 flex items-center justify-center gap-1.5 border border-navy/15 text-navy hover:border-mint-deep/50 hover:text-mint-deep transition-colors">
+                    <Presentation size={11}/>把这份总结送到汇报板
+                  </button>
+                )}
+                {summarizeError && <p className="text-[11px] text-coral mb-2 text-center">{summarizeError}</p>}
+              </>
+            )}
+
+            <div className="flex gap-2 items-center">
+              <input
+                ref={chatInputRef}
+                type="text"
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleSendChat()}
+                placeholder={pendingQuote ? '这一段你想问什么？' : '或者直接问…'}
+                className="flex-1 bg-warm-white rounded-xl px-3 py-2 text-sm text-navy border border-navy/10 outline-none focus:border-coral/40 focus:ring-2 focus:ring-coral/10 placeholder:text-warm-gray/50"/>
+              {speechSupported && (
+                <button onClick={listening ? stopListening : startListening} type="button"
+                  className={`p-2 rounded-xl ${listening ? 'bg-coral text-warm-white animate-pulse' : 'bg-cream-dark/60 text-warm-gray hover:text-navy'}`}>
+                  {listening ? <MicOff size={14}/> : <Mic size={14}/>}
+                </button>
+              )}
+              <button onClick={handleSendChat} disabled={chatLoading}
+                className="p-2 bg-navy text-warm-white rounded-xl hover:bg-navy-light disabled:opacity-50">
+                <Send size={14}/>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DeepReadPanel({
+  paper, currentPage, currentPageText, guide, source, mode, loading, error, saved, onRun, onSave,
+  onSendToBoard, onDismiss, variant = 'section',
+}) {
+  const hasAbstract = !!paper?.abstract
+  const hasPageText = currentPageText.trim().length > 80
+  const rootRef = useRef(null)
+
+  // 动作发生在 PDF 中间、反馈出现在右栏——没有视线引导用户会找不到结果。
+  // 生成开始就把工作台滚进视野（能看到 loading），结果到达由 CSS animation 闪一下。
+  useEffect(() => {
+    if (loading) rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [loading])
+
+  return (
+    <section ref={rootRef} className={variant === 'rail'
+      ? 'px-4 pb-3 max-h-[32vh] overflow-y-auto'
+      : 'px-6 py-4 border-b border-navy/5 bg-gradient-to-b from-warm-white/60 to-transparent'}>
+      <SectionHeader
+        left={<><Sparkles size={11}/> 精读工作台</>}
+        right={hasPageText ? `P.${currentPage}` : '摘要'}
+        accent="coral"/>
+
+      <div className="bg-warm-white border border-coral/18 rounded-xl overflow-hidden">
+        <div className="px-3.5 pt-3.5 pb-3 border-b border-navy/6">
+          <div className="grid grid-cols-3 gap-1.5">
+            <DeepReadAction
+              active={mode === 'map'}
+              icon={<Sparkles size={12}/>}
+              label="路线图"
+              sub="整篇怎么读"
+              loading={loading && mode === 'map'}
+              disabled={loading || !hasAbstract}
+              onClick={() => onRun('map')}
+            />
+            <DeepReadAction
+              active={mode === 'abstract'}
+              icon={<FileText size={12}/>}
+              label="摘要"
+              sub="先抓研究问题"
+              loading={loading && mode === 'abstract'}
+              disabled={loading || !hasAbstract}
+              onClick={() => onRun('abstract')}
+            />
+            <DeepReadAction
+              active={mode === 'page'}
+              icon={<Layers size={12}/>}
+              label={`P.${currentPage}`}
+              sub="当前页陪读"
+              loading={loading && mode === 'page'}
+              disabled={loading || !hasPageText}
+              onClick={() => onRun('page')}
+            />
+          </div>
+
+          {!hasPageText && (
+            <p className="mt-2 mb-0 text-[11.5px] leading-relaxed text-warm-gray/70">
+              当前页文字还没提取到；PDF 加载完成后可按页带读。划选英文句子后也可以点“精读这段”。
+            </p>
+          )}
+        </div>
+
+        {!guide && !error && (
+          <div className="px-3.5 py-3.5">
+            <p className="text-[12.5px] text-navy/72 leading-relaxed m-0">
+              先用“路线图”确定整篇怎么读；读正文时切到当前页；遇到卡住的英文句子，直接在 PDF 上划选后点“精读这段”。
+            </p>
+          </div>
+        )}
+
+        {error && <p className="px-3.5 py-3 text-[12px] text-coral leading-relaxed">{error}</p>}
+
+        {guide && (
+          <div key={`${mode}:${source}:${guide}`} className="deep-read-arrival rounded-xl">
+            <div className="px-3.5 py-2.5 border-b border-navy/6 bg-cream/35 flex items-center justify-between gap-2">
+              <p className="m-0 font-mono text-[9.5px] tracking-widest uppercase text-warm-gray/65">
+                {source || formatDeepReadSource(mode, currentPage)}
+              </p>
+              <span className="shrink-0 inline-flex items-center gap-1.5">
+                <button onClick={onSendToBoard}
+                  className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium border border-navy/15 text-navy hover:border-mint-deep/50 hover:text-mint-deep">
+                  <Presentation size={10}/>
+                  送到汇报
+                </button>
+                <button onClick={onSave} disabled={saved}
+                  className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium ${
+                    saved ? 'bg-mint/20 text-navy' : 'border border-coral/30 text-coral hover:bg-coral/5'
+                  }`}>
+                  <FileText size={10}/>
+                  {saved ? '已保存' : '存笔记'}
+                </button>
+                {/* 结果面板此前没有任何关闭入口：读完一段又读一段，面板越堆越多，
+                    用户既无法继续也无法关掉。 */}
+                {onDismiss && (
+                  <button onClick={onDismiss} title="收起这条结果"
+                    className="w-6 h-6 rounded-lg text-warm-gray/60 hover:text-navy hover:bg-cream-dark/50 flex items-center justify-center transition">
+                    <X size={12}/>
+                  </button>
+                )}
+              </span>
+            </div>
+            <div className="text-[12.5px] leading-relaxed text-navy/84 max-h-[430px] overflow-y-auto px-3.5 py-3.5">
+              <ReactMarkdown components={{
+                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                strong: ({ children }) => <strong className="block text-navy font-semibold mt-3 mb-1 first:mt-0">{children}</strong>,
+                ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 mb-2">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 mb-2">{children}</ol>,
+                li: ({ children }) => <li className="pl-0.5">{children}</li>,
+              }}>{guide}</ReactMarkdown>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function DeepReadAction({ active, icon, label, sub, loading, disabled, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`min-w-0 rounded-lg px-2.5 py-2 text-left border transition disabled:opacity-40 ${
+        active
+          ? 'border-coral/35 bg-coral/7 text-coral'
+          : 'border-navy/8 bg-cream/35 text-navy/76 hover:border-coral/25 hover:bg-coral/5'
+      }`}
+    >
+      <span className="flex items-center gap-1.5 text-[11.5px] font-semibold">
+        {loading ? <Loader2 size={12} className="animate-spin"/> : icon}
+        <span className="truncate">{label}</span>
+      </span>
+      <span className="block mt-0.5 text-[10px] text-warm-gray/75 truncate">{sub}</span>
+    </button>
+  )
+}
+
+// 把已提取的各页文字拼成「全篇」上下文：当前页给足，其余页压缩，总量设上限。
+// 目的是让 AI 能跨页交叉核对（图注的 AUC vs 表格的 AUC 这类矛盾）。
+function buildPaperPagesPayload(pageTexts, focusPage, budget = 24000) {
+  const pages = Object.keys(pageTexts || {})
+    .map(Number)
+    .filter(n => (pageTexts[n] || '').trim().length > 40)
+    .sort((a, b) => a - b)
+  if (pages.length === 0) return ''
+
+  // 当前页优先吃预算，其余页按页序补，避免长论文把关键页挤掉
+  const perOther = Math.max(1200, Math.floor((budget - 6000) / Math.max(1, pages.length - 1)))
+  const parts = []
+  let used = 0
+  for (const n of pages) {
+    const cap = n === focusPage ? 6000 : perOther
+    const body = (pageTexts[n] || '').trim().slice(0, cap)
+    const chunk = `\n【第 ${n} 页】\n${body}`
+    if (used + chunk.length > budget) break
+    parts.push(chunk)
+    used += chunk.length
+  }
+  return parts.join('\n')
+}
+
+function formatDeepReadSource(mode, page) {
+  if (mode === 'map') return '论文精读路线图'
+  if (mode === 'selection') return page ? `第 ${page} 页选中句子` : '选中句子'
+  if (mode === 'page') return page ? `第 ${page} 页原文` : '当前页原文'
+  return '论文摘要'
+}
+
+// ═════════════════════════════════════════════════════════════
+// helpers / sub-components
+// ═════════════════════════════════════════════════════════════
+const NOTE_SOURCE_LABELS = {
+  deep_read: '精读带读',
+  chat_summary: '对话总结',
+  manual: '手写笔记',
+}
+
+function SavedNoteItem({ note, onDelete }) {
+  const [expanded, setExpanded] = useState(false)
+  const long = (note.content || '').length > 180
+  return (
+    <div className="mt-2 bg-warm-white rounded-lg border border-navy/10 px-3 py-2">
+      <div className="flex items-center justify-between text-[10px] font-mono tracking-wide text-warm-gray/60">
+        <span>
+          <span className="text-mint-deep">{NOTE_SOURCE_LABELS[note.source] || '笔记'}</span>
+          {note.created_at && <> · {String(note.created_at).slice(0, 10)}</>}
+        </span>
+        <button onClick={onDelete} className="hover:text-coral transition-colors">删除</button>
+      </div>
+      {/* 带读/对话总结存下来的笔记本身是 markdown，纯文本直出会露出 ** 星号 */}
+      <div
+        className="mt-1 text-[13px] text-navy leading-relaxed overflow-hidden"
+        style={!expanded && long ? { display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical' } : undefined}>
+        <ReactMarkdown components={{
+          p: ({ children }) => <p className="mb-1.5 last:mb-0">{children}</p>,
+          strong: ({ children }) => <strong className="font-semibold text-navy">{children}</strong>,
+          ul: ({ children }) => <ul className="list-disc pl-4 space-y-0.5 mb-1.5">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal pl-4 space-y-0.5 mb-1.5">{children}</ol>,
+          li: ({ children }) => <li className="pl-0.5">{children}</li>,
+          h1: ({ children }) => <p className="font-semibold text-navy mt-2 mb-1 first:mt-0">{children}</p>,
+          h2: ({ children }) => <p className="font-semibold text-navy mt-2 mb-1 first:mt-0">{children}</p>,
+          h3: ({ children }) => <p className="font-semibold text-navy mt-2 mb-1 first:mt-0">{children}</p>,
+        }}>{note.content}</ReactMarkdown>
+      </div>
+      {long && (
+        <button onClick={() => setExpanded(e => !e)}
+          className="mt-1 text-[11px] text-coral hover:text-coral-deep">
+          {expanded ? '收起' : '展开全文'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function SectionHeader({ left, right, accent }) {
+  const accentClass = accent === 'coral' ? 'text-coral' : 'text-warm-gray'
+  return (
+    <div className="flex items-baseline justify-between mb-3">
+      <span className={`inline-flex items-center gap-1.5 font-mono text-[10.5px] tracking-widest uppercase ${accentClass}`}>
+        {left}
+      </span>
+      {right && <span className="font-mono text-[10px] tracking-widest uppercase text-warm-gray/70">{right}</span>}
+    </div>
+  )
+}
+
+function QuoteCard({ quote, onJump, onDelete }) {
+  return (
+    <div className="bg-warm-white border border-navy/8 rounded-xl px-3.5 py-3 mb-2.5 cursor-pointer hover:border-coral/35 hover:-translate-y-px transition-all relative group"
+      onClick={onJump}>
+      <span className="absolute top-2.5 right-3 font-mono text-[9.5px] tracking-wider text-coral bg-coral/10 px-1.5 rounded group-hover:opacity-0 transition-opacity">
+        #{quote.n}
+      </span>
+      {onDelete && (
+        <button
+          onClick={e => { e.stopPropagation(); onDelete() }}
+          title="删除引用（同时移除 PDF 上的高亮）"
+          className="absolute top-2 right-2.5 p-1 text-warm-gray/50 hover:text-coral opacity-0 group-hover:opacity-100 transition-opacity">
+          <X size={12}/>
+        </button>
+      )}
+      {/* 右栏窄：只留 2 行提示定位，核对原文点卡片跳回 PDF */}
+      <p className="border-l-2 border-coral pl-2.5 italic text-[12px] leading-snug text-navy/78 mr-8 mb-2 line-clamp-2"
+        style={{ fontFamily: '"Source Serif Pro", Georgia, serif' }}
+        title={quote.text}>
+        &ldquo;{quote.text}&rdquo;
+      </p>
+      <p className="text-[11px] text-warm-gray font-mono tracking-wider uppercase mb-2">
+        <span className="text-coral-deep">P.{quote.page}</span>
+        {quote.section && <> · {quote.section}</>}
+        <> · {fmtRelativeTime(quote.createdAt)}</>
+      </p>
+      {quote.question && (
+        <div className="bg-mint/10 rounded-lg px-2.5 py-1.5 text-[12px] leading-snug text-navy/82">
+          <span className="font-mono text-[9.5px] tracking-widest uppercase text-mint-deep mr-1.5">Q</span>
+          {quote.question}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function fmtRelativeTime(iso) {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  const diff = Date.now() - t
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)} 小时前`
+  if (diff < 7 * 86400_000) return `${Math.floor(diff / 86400_000)} 天前`
+  return new Date(iso).toLocaleDateString()
+}
+
+function NoPdfState({ paper, error, onUpload, uploading }) {
+  return (
+    <div className="h-full flex items-center justify-center p-8">
+      <div className="bg-warm-white border border-dashed border-navy/15 rounded-2xl p-8 text-center max-w-md">
+        <p className="font-mono text-[10px] tracking-widest uppercase text-warm-gray/60 mb-3">no pdf yet</p>
+        <p className="text-sm text-navy mb-2">还没有可读的全文</p>
+        <p className="text-xs text-warm-gray leading-relaxed mb-5">
+          {error ? `${error}。` : '未自动找到免费全文。'}你可以直接上传手头的 PDF，右栏的摘要和解读照常可读。
+        </p>
+        <div className="flex items-center justify-center gap-2 flex-wrap">
+          <label className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-coral text-warm-white cursor-pointer hover:bg-coral-deep transition-colors ${uploading ? 'opacity-60 pointer-events-none' : ''}`}>
+            {uploading ? <Loader2 size={11} className="animate-spin"/> : <Download size={11} className="rotate-180"/>}
+            {uploading ? '上传中…' : '上传 PDF 精读'}
+            <input type="file" accept="application/pdf,.pdf" className="hidden"
+              onChange={e => { onUpload?.(e.target.files?.[0]); e.target.value = '' }}/>
+          </label>
+          {paper.link && (
+            <a href={paper.link} target="_blank" rel="noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-coral/30 text-coral hover:bg-coral/5">
+              <ExternalLink size={11}/> 在 PubMed 打开原文
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,5 @@
+# Historical screenshots and internal handoffs are not source-distribution assets.
+docs/screenshots/** export-ignore
+docs/*handoff* export-ignore
+AGENTS.md export-ignore
+skills/** export-ignore

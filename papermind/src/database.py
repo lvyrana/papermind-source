@@ -1,0 +1,1595 @@
+"""
+SQLite 数据库：存储论文、笔记、对话、阅读记录
+所有数据按 user_id 隔离
+"""
+
+from __future__ import annotations
+import sqlite3
+import json
+from pathlib import Path
+from datetime import datetime, date, timedelta
+from typing import Optional
+
+DB_PATH = Path(__file__).parent.parent / "data" / "paperdiary.db"
+
+
+def _ensure_db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS saved_papers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT '',
+            paper_id TEXT,
+            pmid TEXT,
+            doi TEXT,
+            title TEXT NOT NULL,
+            abstract TEXT,
+            authors TEXT,
+            journal TEXT,
+            pub_date TEXT,
+            link TEXT,
+            source TEXT,
+            category TEXT,
+            summary_zh TEXT,
+            relevance TEXT,
+            saved_at TEXT NOT NULL,
+            last_read_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_rowid INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (paper_rowid) REFERENCES saved_papers(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_chats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_rowid INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (paper_rowid) REFERENCES saved_papers(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reading_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT '',
+            paper_rowid INTEGER,
+            title TEXT NOT NULL,
+            read_at TEXT NOT NULL,
+            duration_seconds INTEGER DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            user_id TEXT PRIMARY KEY,
+            focus_areas TEXT DEFAULT '',
+            exclude_areas TEXT DEFAULT '',
+            method_interests TEXT DEFAULT '',
+            current_goal TEXT DEFAULT '',
+            background TEXT DEFAULT '',
+            updated_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rate_limits (
+            user_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            date TEXT NOT NULL,
+            count INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, action, date)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS search_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'all',
+            created_at TEXT NOT NULL,
+            trace_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS enrichment_cache (
+            paper_key TEXT PRIMARY KEY,
+            summary_zh TEXT NOT NULL,
+            relevance TEXT NOT NULL DEFAULT '',
+            key_findings TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT '',
+            type TEXT NOT NULL DEFAULT 'general',
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reading_cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_rowid INTEGER NOT NULL,
+            card_type TEXT NOT NULL DEFAULT 'method',
+            title TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL,
+            quote TEXT DEFAULT '',
+            page INTEGER,
+            source TEXT NOT NULL DEFAULT 'manual',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (paper_rowid) REFERENCES saved_papers(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_rowid INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            page INTEGER,
+            section TEXT NOT NULL DEFAULT '',
+            anchor_json TEXT NOT NULL DEFAULT '{}',
+            question TEXT NOT NULL DEFAULT '',
+            answer TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'chat',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (paper_rowid) REFERENCES saved_papers(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS presentation_boards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_rowid INTEGER NOT NULL UNIQUE,
+            sections_json TEXT NOT NULL,
+            why_reading TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (paper_rowid) REFERENCES saved_papers(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS board_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_rowid INTEGER NOT NULL,
+            section TEXT NOT NULL,
+            content TEXT NOT NULL,
+            quote TEXT NOT NULL DEFAULT '',
+            page INTEGER,
+            source TEXT NOT NULL DEFAULT 'selection',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (paper_rowid) REFERENCES saved_papers(id)
+        )
+    """)
+
+    # 苏格拉底自测：每篇论文五个核心问题的状态 + 追问流
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS self_test_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_rowid INTEGER NOT NULL,
+            pillar_key TEXT NOT NULL,
+            pillar_name TEXT NOT NULL,
+            pillar_short TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL DEFAULT 'untouched',
+            turns_json TEXT NOT NULL DEFAULT '[]',
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(paper_rowid, pillar_key),
+            FOREIGN KEY (paper_rowid) REFERENCES saved_papers(id)
+        )
+    """)
+
+    # PDF 文字层损坏时的逐页 OCR 缓存。只存识别文本，不保存页面图片。
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_page_ocr (
+            paper_rowid INTEGER NOT NULL,
+            page_number INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            model TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (paper_rowid, page_number),
+            FOREIGN KEY (paper_rowid) REFERENCES saved_papers(id)
+        )
+    """)
+
+    # 苏格拉底自测：方法学盲区（跨论文累积 = 画像的另一半）
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS method_gaps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            term TEXT NOT NULL,
+            times INTEGER NOT NULL DEFAULT 1,
+            last_paper_rowid INTEGER,
+            last_at TEXT NOT NULL,
+            UNIQUE(user_id, term)
+        )
+    """)
+
+    # 迁移：给 board_items 加 image 列（图表截图文件名）
+    try:
+        conn.execute("ALTER TABLE board_items ADD COLUMN image TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # 迁移：给 saved_papers 加 project_id 列
+    try:
+        conn.execute("ALTER TABLE saved_papers ADD COLUMN project_id INTEGER REFERENCES projects(id)")
+    except sqlite3.OperationalError:
+        pass
+
+    # 迁移：给 saved_papers 加 last_exported_at（真实导出时间）
+    # 此前「已导出」判定为「存在 presentation_boards 行」，但该行在打开精读台时
+    # 就被惰性创建了，等于把「打开过」误标成「导出过」。
+    try:
+        conn.execute("ALTER TABLE saved_papers ADD COLUMN last_exported_at TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    # 迁移：给 saved_papers 加 has_pdf 列
+    try:
+        conn.execute("ALTER TABLE saved_papers ADD COLUMN has_pdf INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+
+    # 迁移：给旧表加 user_id 列（如果不存在）
+    for table in ("saved_papers", "reading_history"):
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+
+    # 迁移：给 user_profiles 加新列
+    for col, default in [
+        ("method_interests", "''"),
+        ("discipline", "''"),
+        ("tracking_days", "'90'"),
+        ("interests_summary", "''"),
+        ("interests_summary_updated_at", "''"),
+        ("interests_summary_is_manual", "'0'"),
+        ("behavior_events_since_summary", "'0'"),
+        # 三层记忆系统
+        ("memory_core", "''"),
+        ("memory_recent", "''"),
+        ("behavior_events_since_recent", "'0'"),
+        ("last_recent_updated_at", "''"),
+        ("last_core_merged_at", "''"),
+        ("core_source", "''"),
+        # 「你说过的」：跨对话保留的明确自我陈述，逐条存 JSON，每条可单独删
+        ("memory_stated", "'[]'"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE user_profiles ADD COLUMN {col} TEXT DEFAULT {default}")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+
+    # 迁移：把旧 interests_summary 数据迁移到 memory_core（一次性）
+    try:
+        conn.execute("""
+            UPDATE user_profiles
+            SET memory_core = interests_summary,
+                core_source = CASE WHEN interests_summary_is_manual = '1' THEN 'manual' ELSE 'auto' END,
+                last_core_merged_at = interests_summary_updated_at
+            WHERE interests_summary != '' AND (memory_core IS NULL OR memory_core = '')
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
+    # 迁移：给 paper_notes 加 source 列（如果不存在）
+    try:
+        conn.execute("ALTER TABLE paper_notes ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
+
+    # 迁移：给 paper_quotes 加 section 列（如果不存在）
+    try:
+        conn.execute("ALTER TABLE paper_quotes ADD COLUMN section TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
+
+    # 索引：加速按 user_id 查询
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_papers_user ON saved_papers(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reading_history_user ON reading_history(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_notes_paper ON paper_notes(paper_rowid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_chats_paper ON paper_chats(paper_rowid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_search_runs_user_created ON search_runs(user_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_enrichment_cache_key ON enrichment_cache(paper_key)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_feedback_user ON user_feedback(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_papers_project ON saved_papers(project_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reading_cards_paper ON reading_cards(paper_rowid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_quotes_paper ON paper_quotes(paper_rowid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_page_ocr_paper ON paper_page_ocr(paper_rowid)")
+
+    conn.commit()
+    return conn
+
+
+def get_conn():
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+def init_db():
+    _ensure_db()
+
+
+# ========== Rate Limiting ==========
+
+def check_rate_limit(user_id: str, action: str, daily_limit: int) -> bool:
+    """检查是否超过频率限制。返回 True 表示允许，False 表示超限"""
+    conn = _ensure_db()
+    today = date.today().isoformat()
+    row = conn.execute(
+        "SELECT count FROM rate_limits WHERE user_id = ? AND action = ? AND date = ?",
+        (user_id, action, today)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return True
+    return row["count"] < daily_limit
+
+
+def increment_rate_limit(user_id: str, action: str):
+    """增加计数"""
+    conn = _ensure_db()
+    today = date.today().isoformat()
+    conn.execute("""
+        INSERT INTO rate_limits (user_id, action, date, count) VALUES (?, ?, ?, 1)
+        ON CONFLICT(user_id, action, date) DO UPDATE SET count = count + 1
+    """, (user_id, action, today))
+    conn.commit()
+    conn.close()
+
+
+def get_rate_limit_remaining(user_id: str, action: str, daily_limit: int) -> int:
+    """获取剩余次数"""
+    conn = _ensure_db()
+    today = date.today().isoformat()
+    row = conn.execute(
+        "SELECT count FROM rate_limits WHERE user_id = ? AND action = ? AND date = ?",
+        (user_id, action, today)
+    ).fetchone()
+    conn.close()
+    used = row["count"] if row else 0
+    return max(0, daily_limit - used)
+
+
+# ========== User Profiles ==========
+
+def get_profile(user_id: str) -> dict:
+    """获取用户研究画像"""
+    defaults = {
+        "focus_areas": "",
+        "exclude_areas": "",
+        "method_interests": "",
+        "current_goal": "",
+        "background": "",
+        "discipline": "",
+        "tracking_days": "90",
+        "interests_summary": "",
+        "interests_summary_updated_at": "",
+        "interests_summary_is_manual": "0",
+        "behavior_events_since_summary": "0",
+        # 三层记忆
+        "memory_core": "",
+        "memory_recent": "",
+        "behavior_events_since_recent": "0",
+        "last_recent_updated_at": "",
+        "last_core_merged_at": "",
+        "core_source": "",
+    }
+    conn = _ensure_db()
+    row = conn.execute("SELECT * FROM user_profiles WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    if row:
+        for k in defaults:
+            try:
+                defaults[k] = row[k] or defaults[k]
+            except (IndexError, KeyError):
+                pass
+    return defaults
+
+
+def save_profile(user_id: str, profile: dict):
+    """保存用户研究画像"""
+    conn = _ensure_db()
+    conn.execute("""
+        INSERT INTO user_profiles (user_id, focus_areas, exclude_areas, method_interests, current_goal, background,
+                                   discipline, tracking_days, interests_summary, interests_summary_updated_at,
+                                   interests_summary_is_manual, behavior_events_since_summary,
+                                   memory_core, memory_recent, behavior_events_since_recent,
+                                   last_recent_updated_at, last_core_merged_at, core_source,
+                                   updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            focus_areas = excluded.focus_areas,
+            exclude_areas = excluded.exclude_areas,
+            method_interests = excluded.method_interests,
+            current_goal = excluded.current_goal,
+            background = excluded.background,
+            discipline = excluded.discipline,
+            tracking_days = excluded.tracking_days,
+            interests_summary = excluded.interests_summary,
+            interests_summary_updated_at = excluded.interests_summary_updated_at,
+            interests_summary_is_manual = excluded.interests_summary_is_manual,
+            behavior_events_since_summary = excluded.behavior_events_since_summary,
+            memory_core = excluded.memory_core,
+            memory_recent = excluded.memory_recent,
+            behavior_events_since_recent = excluded.behavior_events_since_recent,
+            last_recent_updated_at = excluded.last_recent_updated_at,
+            last_core_merged_at = excluded.last_core_merged_at,
+            core_source = excluded.core_source,
+            updated_at = excluded.updated_at
+    """, (
+        user_id,
+        profile.get("focus_areas", ""),
+        profile.get("exclude_areas", ""),
+        profile.get("method_interests", ""),
+        profile.get("current_goal", ""),
+        profile.get("background", ""),
+        profile.get("discipline", ""),
+        profile.get("tracking_days", "90"),
+        profile.get("interests_summary", ""),
+        profile.get("interests_summary_updated_at", ""),
+        profile.get("interests_summary_is_manual", "0"),
+        profile.get("behavior_events_since_summary", "0"),
+        profile.get("memory_core", ""),
+        profile.get("memory_recent", ""),
+        profile.get("behavior_events_since_recent", "0"),
+        profile.get("last_recent_updated_at", ""),
+        profile.get("last_core_merged_at", ""),
+        profile.get("core_source", ""),
+        datetime.now().isoformat(),
+    ))
+    conn.commit()
+    conn.close()
+
+
+def increment_recent_events(user_id: str) -> int:
+    """递增 memory_recent 的行为计数器，返回新值"""
+    conn = _ensure_db()
+    conn.execute(
+        "INSERT INTO user_profiles (user_id, updated_at) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING",
+        (user_id, datetime.now().isoformat()),
+    )
+    conn.execute(
+        "UPDATE user_profiles SET behavior_events_since_recent = COALESCE(behavior_events_since_recent, 0) + 1 WHERE user_id = ?",
+        (user_id,),
+    )
+    conn.commit()
+    row = conn.execute("SELECT behavior_events_since_recent FROM user_profiles WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return int(row[0]) if row else 0
+
+
+def reset_recent_events(user_id: str):
+    """recent 更新后归零计数器"""
+    conn = _ensure_db()
+    conn.execute("UPDATE user_profiles SET behavior_events_since_recent = '0' WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def save_search_run(user_id: str, source: str, trace: dict) -> int:
+    """保存一次检索轨迹，便于后续排查召回问题。"""
+    conn = _ensure_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO search_runs (user_id, source, created_at, trace_json) VALUES (?, ?, ?, ?)",
+        (user_id, source or "all", now, json.dumps(trace, ensure_ascii=False)),
+    )
+    # 每个用户只保留最近 30 次，避免调试日志无限增长。
+    conn.execute(
+        """
+        DELETE FROM search_runs
+        WHERE user_id = ?
+          AND id NOT IN (
+              SELECT id FROM search_runs
+              WHERE user_id = ?
+              ORDER BY created_at DESC, id DESC
+              LIMIT 30
+          )
+        """,
+        (user_id, user_id),
+    )
+    conn.commit()
+    row_id = cursor.lastrowid
+    conn.close()
+    return row_id
+
+
+def get_latest_search_run(user_id: str = "") -> Optional[dict]:
+    """获取最近一次检索轨迹。"""
+    conn = _ensure_db()
+    row = conn.execute(
+        """
+        SELECT id, source, created_at, trace_json
+        FROM search_runs
+        WHERE user_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+
+    try:
+        trace = json.loads(row["trace_json"] or "{}")
+    except json.JSONDecodeError:
+        trace = {}
+    trace["run_id"] = row["id"]
+    trace["created_at"] = trace.get("created_at") or row["created_at"]
+    trace["source_requested"] = trace.get("source_requested") or row["source"]
+    return trace
+
+
+# ========== Saved Papers ==========
+
+def save_paper(paper: dict, user_id: str = "") -> int:
+    """保存/收藏一篇论文，返回 row id"""
+    conn = _ensure_db()
+    existing = conn.execute(
+        "SELECT id FROM saved_papers WHERE title = ? AND user_id = ?",
+        (paper.get("title", ""), user_id)
+    ).fetchone()
+    if existing:
+        conn.execute("""
+            UPDATE saved_papers SET
+                summary_zh = COALESCE(?, summary_zh),
+                relevance = COALESCE(?, relevance),
+                last_read_at = ?
+            WHERE id = ?
+        """, (paper.get("summary_zh"), paper.get("relevance"),
+              datetime.now().isoformat(), existing["id"]))
+        conn.commit()
+        conn.close()
+        return existing["id"]
+
+    cursor = conn.execute("""
+        INSERT INTO saved_papers
+        (user_id, paper_id, pmid, doi, title, abstract, authors, journal, pub_date,
+         link, source, category, summary_zh, relevance, saved_at, last_read_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        user_id,
+        paper.get("paper_id", ""),
+        paper.get("pmid", ""),
+        paper.get("doi", ""),
+        paper.get("title", ""),
+        paper.get("abstract", ""),
+        paper.get("authors", ""),
+        paper.get("journal", ""),
+        paper.get("pub_date", ""),
+        paper.get("link", ""),
+        paper.get("source", ""),
+        paper.get("category", ""),
+        paper.get("summary_zh", ""),
+        paper.get("relevance", ""),
+        datetime.now().isoformat(),
+        datetime.now().isoformat(),
+    ))
+    conn.commit()
+    row_id = cursor.lastrowid
+    conn.close()
+    return row_id
+
+
+def get_saved_papers(user_id: str = "") -> list[dict]:
+    """获取用户收藏的论文"""
+    conn = _ensure_db()
+    rows = conn.execute("""
+        SELECT sp.*,
+               (SELECT COUNT(*) FROM paper_notes WHERE paper_rowid = sp.id) as note_count,
+               (SELECT COUNT(*) FROM paper_chats WHERE paper_rowid = sp.id) as chat_count,
+               (SELECT COUNT(*) FROM reading_cards WHERE paper_rowid = sp.id) as card_count,
+               (sp.last_exported_at IS NOT NULL AND sp.last_exported_at != '') as has_export
+        FROM saved_papers sp
+        WHERE sp.user_id = ?
+        ORDER BY sp.saved_at DESC
+    """, (user_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_exported(paper_id: int):
+    """记录一次真实导出。判定「已导出」只认这里，不认汇报板是否存在——
+    汇报板在打开精读台时就会惰性创建。"""
+    conn = _ensure_db()
+    conn.execute("UPDATE saved_papers SET last_exported_at = ? WHERE id = ?",
+                 (datetime.now().isoformat(), paper_id))
+    conn.commit()
+    conn.close()
+
+
+def touch_last_read(paper_id: int):
+    """记录一次「打开精读」，让首页「在读状态」真实反映最近阅读。"""
+    conn = _ensure_db()
+    conn.execute(
+        "UPDATE saved_papers SET last_read_at = ? WHERE id = ?",
+        (datetime.now().isoformat(), paper_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ========== 苏格拉底自测 ==========
+
+# 五个核心问题（内部 key 固定；name/short 由 AI 按论文实例化后覆盖）
+# 注意：「五根柱子」是内部口语，绝不进 UI —— 界面统一称「核心问题」。
+DEFAULT_PILLARS = [
+    {"key": "question",   "name": "研究问题",     "short": "这篇在回答什么？为什么值得问？"},
+    {"key": "method_fit", "name": "方法—问题匹配", "short": "这个设计能不能真回答那个问题？"},
+    {"key": "strength",   "name": "结果有多强",   "short": "效应量和区间说明了什么？"},
+    {"key": "weakness",   "name": "哪里站不住",   "short": "最可能的偏倚在哪？"},
+    {"key": "scope",      "name": "外推边界",     "short": "这结论能用在谁身上？"},
+]
+
+
+def _session_row_to_dict(row) -> dict:
+    d = dict(row)
+    try:
+        d["turns"] = json.loads(d.pop("turns_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        d["turns"] = []
+    return d
+
+
+def get_self_test(paper_rowid: int) -> list[dict]:
+    """取一篇论文的自测会话（五个核心问题）。不存在时返回空列表。"""
+    conn = _ensure_db()
+    rows = conn.execute(
+        "SELECT * FROM self_test_sessions WHERE paper_rowid = ? ORDER BY sort_order, id",
+        (paper_rowid,),
+    ).fetchall()
+    conn.close()
+    return [_session_row_to_dict(r) for r in rows]
+
+
+def init_self_test(paper_rowid: int, pillars: list[dict] = None) -> list[dict]:
+    """首次进入自测时建会话。pillars 可由 AI 按论文实例化，缺省用通用问法。"""
+    pillars = pillars or DEFAULT_PILLARS
+    now = datetime.now().isoformat()
+    conn = _ensure_db()
+    for i, p in enumerate(pillars):
+        conn.execute(
+            """INSERT OR IGNORE INTO self_test_sessions
+               (paper_rowid, pillar_key, pillar_name, pillar_short, state,
+                turns_json, turn_count, sort_order, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 'untouched', '[]', 0, ?, ?, ?)""",
+            (paper_rowid, p["key"], p.get("name", ""), p.get("short", ""), i, now, now),
+        )
+    conn.commit()
+    conn.close()
+    return get_self_test(paper_rowid)
+
+
+def update_self_test(paper_rowid: int, pillar_key: str, state: str = None,
+                     turns: list = None, turn_count: int = None):
+    """更新某个核心问题的状态 / 追问流。"""
+    sets, params = [], []
+    if state is not None:
+        sets.append("state = ?"); params.append(state)
+    if turns is not None:
+        sets.append("turns_json = ?"); params.append(json.dumps(turns, ensure_ascii=False))
+    if turn_count is not None:
+        sets.append("turn_count = ?"); params.append(turn_count)
+    if not sets:
+        return
+    sets.append("updated_at = ?"); params.append(datetime.now().isoformat())
+    params += [paper_rowid, pillar_key]
+    conn = _ensure_db()
+    conn.execute(
+        f"UPDATE self_test_sessions SET {', '.join(sets)} WHERE paper_rowid = ? AND pillar_key = ?",
+        params,
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_paper_page_ocr(paper_rowid: int) -> list[dict]:
+    """读取一篇论文已缓存的逐页 OCR 文本。"""
+    conn = _ensure_db()
+    rows = conn.execute(
+        """SELECT page_number, text, model, updated_at
+           FROM paper_page_ocr WHERE paper_rowid = ? ORDER BY page_number""",
+        (paper_rowid,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def save_paper_page_ocr(paper_rowid: int, page_number: int, text: str, model: str = ""):
+    """覆盖保存单页 OCR 结果；图片不落盘。"""
+    conn = _ensure_db()
+    conn.execute(
+        """INSERT INTO paper_page_ocr
+           (paper_rowid, page_number, text, model, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(paper_rowid, page_number) DO UPDATE SET
+             text = excluded.text,
+             model = excluded.model,
+             updated_at = excluded.updated_at""",
+        (paper_rowid, page_number, text, model, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def record_method_gap(user_id: str, term: str, paper_rowid: int = None):
+    """记一次方法学盲区（同一术语累加次数）。"""
+    term = (term or "").strip()
+    if not term:
+        return
+    now = datetime.now().isoformat()
+    conn = _ensure_db()
+    conn.execute(
+        """INSERT INTO method_gaps (user_id, term, times, last_paper_rowid, last_at)
+           VALUES (?, ?, 1, ?, ?)
+           ON CONFLICT(user_id, term) DO UPDATE SET
+             times = times + 1, last_paper_rowid = excluded.last_paper_rowid,
+             last_at = excluded.last_at""",
+        (user_id, term, paper_rowid, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_method_gaps(user_id: str, limit: int = 20) -> list[dict]:
+    conn = _ensure_db()
+    rows = conn.execute(
+        """SELECT term, times, last_at FROM method_gaps
+           WHERE user_id = ? ORDER BY times DESC, last_at DESC LIMIT ?""",
+        (user_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_deep_reading_signals(user_id: str, days: int = 90, limit: int = 40) -> dict:
+    """精读行为信号：记忆改为从这里学，而不是从早已停用的画像表单。
+
+    卡片是最高质量的信号——它是用户自己动手沉淀下来的判断。
+    """
+    conn = _ensure_db()
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    cards = [
+        dict(r) for r in conn.execute(
+            """SELECT rc.card_type, rc.title, rc.content, sp.title AS paper_title, sp.category
+               FROM reading_cards rc JOIN saved_papers sp ON rc.paper_rowid = sp.id
+               WHERE sp.user_id = ? AND rc.created_at >= ?
+               ORDER BY rc.created_at DESC LIMIT ?""",
+            (user_id, since, limit),
+        ).fetchall()
+    ]
+    papers = [
+        dict(r) for r in conn.execute(
+            """SELECT title, category FROM saved_papers
+               WHERE user_id = ? AND COALESCE(last_read_at, saved_at) >= ?
+               ORDER BY COALESCE(last_read_at, saved_at) DESC LIMIT ?""",
+            (user_id, since, limit),
+        ).fetchall()
+    ]
+    questions = [
+        r["content"] for r in conn.execute(
+            """SELECT pc.content FROM paper_chats pc
+               JOIN saved_papers sp ON pc.paper_rowid = sp.id
+               WHERE sp.user_id = ? AND pc.role = 'user' AND pc.created_at >= ?
+               ORDER BY pc.created_at DESC LIMIT ?""",
+            (user_id, since, limit),
+        ).fetchall()
+    ]
+    conn.close()
+    return {"cards": cards, "papers": papers, "questions": questions}
+
+
+def get_stated_memory(user_id: str) -> list[dict]:
+    """「你说过的」——用户在对话里明确讲过的自我陈述，跨对话保留。
+
+    与阅读画像分开存：这里每条都能追到某次对话，画像每句能追到论文和卡片，
+    两边都可查证、可单独删除；混在一段里就又变成无从核实的话。
+    """
+    conn = _ensure_db()
+    row = conn.execute(
+        "SELECT memory_stated FROM user_profiles WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    conn.close()
+    if not row or not row["memory_stated"]:
+        return []
+    try:
+        items = json.loads(row["memory_stated"])
+        return items if isinstance(items, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def save_stated_memory(user_id: str, items: list[dict]):
+    conn = _ensure_db()
+    conn.execute(
+        """INSERT INTO user_profiles (user_id, memory_stated, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             memory_stated = excluded.memory_stated, updated_at = excluded.updated_at""",
+        (user_id, json.dumps(items[:12], ensure_ascii=False), datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def wipe_memory(user_id: str, include_legacy_profile: bool = True):
+    """彻底清空记忆。
+
+    只清 memory_* 不够：早年画像表单写入的 focus_areas / background / discipline 等
+    仍留在库里，任何一处代码读到就会让「用户根本不认的旧描述」重新出现。
+    要清就连它们一起清。
+    """
+    cols = ["memory_core = ''", "memory_recent = ''", "memory_stated = '[]'"]
+    if include_legacy_profile:
+        cols += [
+            "focus_areas = ''", "exclude_areas = ''", "method_interests = ''",
+            "current_goal = ''", "background = ''",
+        ]
+        # discipline 是后加的列，老库可能没有
+        try:
+            conn = _ensure_db()
+            conn.execute("SELECT discipline FROM user_profiles LIMIT 1").fetchone()
+            cols.append("discipline = ''")
+            conn.close()
+        except sqlite3.OperationalError:
+            pass
+    conn = _ensure_db()
+    conn.execute(
+        f"UPDATE user_profiles SET {', '.join(cols)}, updated_at = ? WHERE user_id = ?",
+        (datetime.now().isoformat(), user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_memory_fields(user_id: str, memory_core: Optional[str] = None,
+                         memory_recent: Optional[str] = None):
+    """让用户直接改写/清空记忆。记忆必须可纠正，否则就是黑箱。"""
+    sets, params = [], []
+    if memory_core is not None:
+        sets.append("memory_core = ?"); params.append(memory_core)
+    if memory_recent is not None:
+        sets.append("memory_recent = ?"); params.append(memory_recent)
+    if not sets:
+        return
+    sets.append("updated_at = ?"); params.append(datetime.now().isoformat())
+    params.append(user_id)
+    conn = _ensure_db()
+    conn.execute(f"UPDATE user_profiles SET {', '.join(sets)} WHERE user_id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def get_portrait(user_id: str) -> dict:
+    """书架画像卡：完全由精读行为聚合，无任何用户填写项（只读副产品）。
+
+    返回主题分布（按 category）、卡片四类构成、以及近 30 天精读篇数。
+    """
+    conn = _ensure_db()
+    topics = [
+        {"name": r["category"] or "未分类", "n": r["n"]}
+        for r in conn.execute(
+            """SELECT category, COUNT(*) as n FROM saved_papers
+               WHERE user_id = ? GROUP BY category ORDER BY n DESC LIMIT 5""",
+            (user_id,),
+        ).fetchall()
+    ]
+    card_mix = {
+        r["card_type"]: r["n"]
+        for r in conn.execute(
+            """SELECT rc.card_type, COUNT(*) as n FROM reading_cards rc
+               JOIN saved_papers sp ON rc.paper_rowid = sp.id
+               WHERE sp.user_id = ? GROUP BY rc.card_type""",
+            (user_id,),
+        ).fetchall()
+    }
+    since = (datetime.now() - timedelta(days=30)).isoformat()
+    recent_papers = conn.execute(
+        """SELECT COUNT(*) as n FROM saved_papers
+           WHERE user_id = ? AND COALESCE(last_read_at, saved_at) >= ?""",
+        (user_id, since),
+    ).fetchone()["n"]
+    total_papers = conn.execute(
+        "SELECT COUNT(*) as n FROM saved_papers WHERE user_id = ?", (user_id,)
+    ).fetchone()["n"]
+    conn.close()
+    return {
+        "topics": topics,
+        "card_mix": card_mix,
+        "recent_papers": recent_papers,
+        "total_papers": total_papers,
+        # 画像的另一半：自测暴露的方法学盲区（跨论文累积）
+        "method_gaps": get_method_gaps(user_id, limit=8),
+    }
+
+
+def get_saved_paper(paper_id: int) -> Optional[dict]:
+    conn = _ensure_db()
+    row = conn.execute("SELECT * FROM saved_papers WHERE id = ?", (paper_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def delete_saved_paper(paper_id: int):
+    conn = _ensure_db()
+    conn.execute("DELETE FROM self_test_sessions WHERE paper_rowid = ?", (paper_id,))
+    conn.execute("DELETE FROM paper_page_ocr WHERE paper_rowid = ?", (paper_id,))
+    conn.execute("DELETE FROM paper_notes WHERE paper_rowid = ?", (paper_id,))
+    conn.execute("DELETE FROM paper_chats WHERE paper_rowid = ?", (paper_id,))
+    conn.execute("DELETE FROM reading_cards WHERE paper_rowid = ?", (paper_id,))
+    conn.execute("DELETE FROM paper_quotes WHERE paper_rowid = ?", (paper_id,))
+    conn.execute("DELETE FROM board_items WHERE paper_rowid = ?", (paper_id,))
+    conn.execute("DELETE FROM presentation_boards WHERE paper_rowid = ?", (paper_id,))
+    conn.execute("UPDATE reading_history SET paper_rowid = NULL WHERE paper_rowid = ?", (paper_id,))
+    conn.execute("UPDATE method_gaps SET last_paper_rowid = NULL WHERE last_paper_rowid = ?", (paper_id,))
+    conn.execute("DELETE FROM saved_papers WHERE id = ?", (paper_id,))
+    conn.commit()
+    conn.close()
+
+
+def update_paper_enrichment(paper_id: int, summary_zh: str, relevance: str, category: str = ""):
+    """更新收藏论文的 AI 解读字段"""
+    conn = _ensure_db()
+    conn.execute(
+        """UPDATE saved_papers SET
+               summary_zh = COALESCE(NULLIF(?, ''), summary_zh),
+               relevance  = COALESCE(NULLIF(?, ''), relevance),
+               category   = COALESCE(NULLIF(?, ''), category)
+           WHERE id = ?""",
+        (summary_zh, relevance, category, paper_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ========== Notes ==========
+
+def save_note(paper_rowid: int, content: str, source: str = "manual", note_id: int = None) -> int:
+    conn = _ensure_db()
+    now = datetime.now().isoformat()
+
+    # 更新已有笔记（按 id）
+    if note_id:
+        conn.execute(
+            "UPDATE paper_notes SET content = ?, updated_at = ? WHERE id = ?",
+            (content, now, note_id)
+        )
+        conn.commit()
+        conn.close()
+        return note_id
+
+    # 每次新增一条（无论 source）
+    cursor = conn.execute(
+        "INSERT INTO paper_notes (paper_rowid, content, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (paper_rowid, content, source, now, now)
+    )
+    conn.commit()
+    row_id = cursor.lastrowid
+    conn.close()
+    return row_id
+
+
+def get_note_owner(note_id: int) -> str:
+    """返回笔记所属论文的 user_id，用于归属校验"""
+    conn = _ensure_db()
+    row = conn.execute(
+        "SELECT sp.user_id FROM paper_notes pn JOIN saved_papers sp ON pn.paper_rowid = sp.id WHERE pn.id = ?",
+        (note_id,)
+    ).fetchone()
+    conn.close()
+    return row["user_id"] if row else ""
+
+
+def delete_note(note_id: int) -> bool:
+    conn = _ensure_db()
+    conn.execute("DELETE FROM paper_notes WHERE id = ?", (note_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_notes(paper_rowid: int) -> list[dict]:
+    conn = _ensure_db()
+    rows = conn.execute(
+        "SELECT * FROM paper_notes WHERE paper_rowid = ? ORDER BY created_at DESC",
+        (paper_rowid,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ========== Reading Cards ==========
+
+CARD_TYPES = ("method", "finding", "critique", "transfer")
+
+
+def save_card(paper_rowid: int, card_type: str, title: str, content: str,
+              quote: str = "", page: int = None, source: str = "manual") -> int:
+    conn = _ensure_db()
+    now = datetime.now().isoformat()
+    if card_type not in CARD_TYPES:
+        card_type = "method"
+    cursor = conn.execute(
+        """INSERT INTO reading_cards (paper_rowid, card_type, title, content, quote, page, source, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (paper_rowid, card_type, title, content, quote, page, source, now, now)
+    )
+    conn.commit()
+    row_id = cursor.lastrowid
+    conn.close()
+    return row_id
+
+
+def get_cards(paper_rowid: int) -> list[dict]:
+    conn = _ensure_db()
+    rows = conn.execute(
+        "SELECT * FROM reading_cards WHERE paper_rowid = ? ORDER BY created_at ASC",
+        (paper_rowid,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_card(card_id: int, card_type: str = None, title: str = None,
+                content: str = None) -> bool:
+    conn = _ensure_db()
+    updates, params = [], []
+    if card_type is not None and card_type in CARD_TYPES:
+        updates.append("card_type = ?")
+        params.append(card_type)
+    if title is not None:
+        updates.append("title = ?")
+        params.append(title)
+    if content is not None:
+        updates.append("content = ?")
+        params.append(content)
+    if not updates:
+        conn.close()
+        return False
+    updates.append("updated_at = ?")
+    params.append(datetime.now().isoformat())
+    params.append(card_id)
+    conn.execute(f"UPDATE reading_cards SET {', '.join(updates)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_card(card_id: int):
+    conn = _ensure_db()
+    conn.execute("DELETE FROM reading_cards WHERE id = ?", (card_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_card_owner(card_id: int) -> str:
+    """返回卡片所属论文的 user_id，用于归属校验"""
+    conn = _ensure_db()
+    row = conn.execute(
+        "SELECT sp.user_id FROM reading_cards rc JOIN saved_papers sp ON rc.paper_rowid = sp.id WHERE rc.id = ?",
+        (card_id,)
+    ).fetchone()
+    conn.close()
+    return row["user_id"] if row else ""
+
+
+# ========== Paper Quotes ==========
+
+def _quote_row_to_dict(row) -> dict:
+    data = dict(row)
+    raw_anchor = data.pop("anchor_json", "{}") or "{}"
+    try:
+        data["anchor"] = json.loads(raw_anchor)
+    except Exception:
+        data["anchor"] = {}
+    return data
+
+
+def save_quote(paper_rowid: int, text: str, page: int = None, section: str = "", anchor: dict = None,
+               question: str = "", answer: str = "", source: str = "chat") -> dict:
+    conn = _ensure_db()
+    now = datetime.now().isoformat()
+    anchor_json = json.dumps(anchor or {}, ensure_ascii=False)
+    cursor = conn.execute(
+        """INSERT INTO paper_quotes
+              (paper_rowid, text, page, section, anchor_json, question, answer, source, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (paper_rowid, text, page, section or "", anchor_json, question, answer, source, now, now)
+    )
+    row_id = cursor.lastrowid
+    row = conn.execute("SELECT * FROM paper_quotes WHERE id = ?", (row_id,)).fetchone()
+    conn.commit()
+    conn.close()
+    return _quote_row_to_dict(row)
+
+
+def get_quotes(paper_rowid: int) -> list[dict]:
+    conn = _ensure_db()
+    rows = conn.execute(
+        "SELECT * FROM paper_quotes WHERE paper_rowid = ? ORDER BY created_at ASC",
+        (paper_rowid,)
+    ).fetchall()
+    conn.close()
+    return [_quote_row_to_dict(r) for r in rows]
+
+
+def get_quote_owner(quote_id: int) -> str:
+    conn = _ensure_db()
+    row = conn.execute(
+        "SELECT sp.user_id FROM paper_quotes pq JOIN saved_papers sp ON pq.paper_rowid = sp.id WHERE pq.id = ?",
+        (quote_id,)
+    ).fetchone()
+    conn.close()
+    return row["user_id"] if row else ""
+
+
+def delete_quote(quote_id: int) -> bool:
+    conn = _ensure_db()
+    conn.execute("DELETE FROM paper_quotes WHERE id = ?", (quote_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+# ========== Presentation Board（组会汇报板）==========
+
+# 板块用稳定英文 key 存储，中文名只是展示层默认值（用户可改名）
+DEFAULT_BOARD_SECTIONS = [
+    {"key": "background", "title": "研究背景"},
+    {"key": "question", "title": "研究问题"},
+    {"key": "methods", "title": "方法"},
+    {"key": "results", "title": "关键结果"},
+    {"key": "critique", "title": "批判与局限"},
+    {"key": "implications", "title": "对我的启发"},
+    {"key": "discussion", "title": "讨论问题"},
+]
+
+BOARD_ITEM_SOURCES = ("selection", "deep_read", "card", "chat", "manual", "figure")
+
+
+def get_or_create_board(paper_rowid: int, why_reading: str = "") -> dict:
+    """惰性建板：收藏过的论文第一次访问汇报板时自动创建默认结构"""
+    conn = _ensure_db()
+    row = conn.execute(
+        "SELECT * FROM presentation_boards WHERE paper_rowid = ?", (paper_rowid,)
+    ).fetchone()
+    if not row:
+        now = datetime.now().isoformat()
+        conn.execute(
+            """INSERT INTO presentation_boards (paper_rowid, sections_json, why_reading, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (paper_rowid, json.dumps(DEFAULT_BOARD_SECTIONS, ensure_ascii=False), why_reading or "", now, now)
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM presentation_boards WHERE paper_rowid = ?", (paper_rowid,)
+        ).fetchone()
+    conn.close()
+    d = dict(row)
+    try:
+        d["sections"] = json.loads(d.pop("sections_json"))
+    except (json.JSONDecodeError, TypeError):
+        d["sections"] = list(DEFAULT_BOARD_SECTIONS)
+    return d
+
+
+def update_board(paper_rowid: int, sections: list = None, why_reading: str = None):
+    conn = _ensure_db()
+    now = datetime.now().isoformat()
+    if sections is not None:
+        conn.execute(
+            "UPDATE presentation_boards SET sections_json = ?, updated_at = ? WHERE paper_rowid = ?",
+            (json.dumps(sections, ensure_ascii=False), now, paper_rowid)
+        )
+    if why_reading is not None:
+        conn.execute(
+            "UPDATE presentation_boards SET why_reading = ?, updated_at = ? WHERE paper_rowid = ?",
+            (why_reading, now, paper_rowid)
+        )
+    conn.commit()
+    conn.close()
+
+
+def add_board_item(paper_rowid: int, section: str, content: str, quote: str = "",
+                   page: int = None, source: str = "selection", image: str = "") -> dict:
+    if source not in BOARD_ITEM_SOURCES:
+        source = "manual"
+    conn = _ensure_db()
+    now = datetime.now().isoformat()
+    max_order = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), 0) FROM board_items WHERE paper_rowid = ? AND section = ?",
+        (paper_rowid, section)
+    ).fetchone()[0]
+    cursor = conn.execute(
+        """INSERT INTO board_items (paper_rowid, section, content, quote, page, source, sort_order, image, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (paper_rowid, section, content, quote or "", page, source, max_order + 1, image or "", now, now)
+    )
+    row = conn.execute("SELECT * FROM board_items WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    conn.commit()
+    conn.close()
+    return dict(row)
+
+
+def get_board_item(item_id: int) -> Optional[dict]:
+    conn = _ensure_db()
+    row = conn.execute("SELECT * FROM board_items WHERE id = ?", (item_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_board_items(paper_rowid: int) -> list[dict]:
+    conn = _ensure_db()
+    rows = conn.execute(
+        "SELECT * FROM board_items WHERE paper_rowid = ? ORDER BY section, sort_order, created_at",
+        (paper_rowid,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_board_item(item_id: int, content: str = None, section: str = None, sort_order: int = None):
+    conn = _ensure_db()
+    now = datetime.now().isoformat()
+    if content is not None:
+        conn.execute("UPDATE board_items SET content = ?, updated_at = ? WHERE id = ?", (content, now, item_id))
+    if section is not None:
+        conn.execute("UPDATE board_items SET section = ?, updated_at = ? WHERE id = ?", (section, now, item_id))
+    if sort_order is not None:
+        conn.execute("UPDATE board_items SET sort_order = ?, updated_at = ? WHERE id = ?", (sort_order, now, item_id))
+    conn.commit()
+    conn.close()
+
+
+def get_board_item_owner(item_id: int) -> str:
+    conn = _ensure_db()
+    row = conn.execute(
+        "SELECT sp.user_id FROM board_items bi JOIN saved_papers sp ON bi.paper_rowid = sp.id WHERE bi.id = ?",
+        (item_id,)
+    ).fetchone()
+    conn.close()
+    return row["user_id"] if row else ""
+
+
+def delete_board_item(item_id: int):
+    conn = _ensure_db()
+    conn.execute("DELETE FROM board_items WHERE id = ?", (item_id,))
+    conn.commit()
+    conn.close()
+
+
+# ========== Chat History ==========
+
+def save_chat_message(paper_rowid: int, role: str, content: str):
+    conn = _ensure_db()
+    conn.execute(
+        "INSERT INTO paper_chats (paper_rowid, role, content, created_at) VALUES (?, ?, ?, ?)",
+        (paper_rowid, role, content, datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_chat_history(paper_rowid: int) -> list[dict]:
+    conn = _ensure_db()
+    rows = conn.execute(
+        "SELECT role, content, created_at FROM paper_chats WHERE paper_rowid = ? ORDER BY created_at ASC",
+        (paper_rowid,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def clear_chat_history(paper_rowid: int) -> int:
+    """清空一篇论文的全部对话。聊过的内容有时只是当下随手一问，
+    用户应当能删掉它——不给删除入口等于强迫留痕。"""
+    conn = _ensure_db()
+    cur = conn.execute("DELETE FROM paper_chats WHERE paper_rowid = ?", (paper_rowid,))
+    conn.commit()
+    n = cur.rowcount
+    conn.close()
+    return n
+
+
+def get_all_recent_chats(user_id: str, limit: int = 30) -> list[dict]:
+    """获取用户所有论文的最近对话（用于兴趣摘要生成）"""
+    conn = _ensure_db()
+    rows = conn.execute(
+        """SELECT pc.role, pc.content, pc.created_at
+           FROM paper_chats pc
+           JOIN saved_papers sp ON pc.paper_rowid = sp.id
+           WHERE sp.user_id = ?
+           ORDER BY pc.created_at DESC
+           LIMIT ?""",
+        (user_id, limit)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_recent_chats_since(user_id: str, days: int = 14, limit: int = 40) -> list[dict]:
+    """获取近 N 天跨论文对话，按时间倒序。"""
+    conn = _ensure_db()
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        """SELECT pc.role, pc.content, pc.created_at
+           FROM paper_chats pc
+           JOIN saved_papers sp ON pc.paper_rowid = sp.id
+           WHERE sp.user_id = ? AND pc.created_at >= ?
+           ORDER BY pc.created_at DESC
+           LIMIT ?""",
+        (user_id, since, limit)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ========== Reading History ==========
+
+def record_reading(paper_rowid: int | None, title: str, user_id: str = ""):
+    conn = _ensure_db()
+    conn.execute(
+        "INSERT INTO reading_history (user_id, paper_rowid, title, read_at) VALUES (?, ?, ?, ?)",
+        (user_id, paper_rowid, title, datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_reading_history(user_id: str = "", limit: int = 20) -> list[dict]:
+    conn = _ensure_db()
+    rows = conn.execute(
+        "SELECT * FROM reading_history WHERE user_id = ? ORDER BY read_at DESC LIMIT ?",
+        (user_id, limit)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_reading_history_since(user_id: str = "", days: int = 14, limit: int = 20) -> list[dict]:
+    conn = _ensure_db()
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        "SELECT * FROM reading_history WHERE user_id = ? AND read_at >= ? ORDER BY read_at DESC LIMIT ?",
+        (user_id, since, limit)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ========== 收藏关键词提取（用于优化推荐） ==========
+
+def get_saved_titles(user_id: str, limit: int = 30) -> list[str]:
+    """获取用户收藏论文的标题，用于优化推荐"""
+    conn = _ensure_db()
+    rows = conn.execute(
+        "SELECT title FROM saved_papers WHERE user_id = ? ORDER BY saved_at DESC LIMIT ?",
+        (user_id, limit)
+    ).fetchall()
+    conn.close()
+    return [r["title"] for r in rows]
+
+
+def get_saved_titles_since(user_id: str, days: int = 14, limit: int = 40) -> list[str]:
+    """获取近 N 天收藏论文标题，用于近期变化观察。"""
+    conn = _ensure_db()
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        "SELECT title FROM saved_papers WHERE user_id = ? AND saved_at >= ? ORDER BY saved_at DESC LIMIT ?",
+        (user_id, since, limit)
+    ).fetchall()
+    conn.close()
+    return [r["title"] for r in rows]
+
+
+def get_saved_categories(user_id: str) -> dict:
+    """获取用户收藏论文的分类分布，用于兴趣摘要"""
+    conn = _ensure_db()
+    rows = conn.execute(
+        "SELECT category, COUNT(*) as cnt FROM saved_papers WHERE user_id = ? AND category IS NOT NULL GROUP BY category ORDER BY cnt DESC",
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    return {r["category"]: r["cnt"] for r in rows}
+
+
+# ========== User Feedback ==========
+
+def save_feedback(user_id: str, feedback_type: str, content: str) -> int:
+    conn = _ensure_db()
+    cursor = conn.execute(
+        "INSERT INTO user_feedback (user_id, type, content, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, feedback_type, content, datetime.now().isoformat())
+    )
+    conn.commit()
+    row_id = cursor.lastrowid
+    conn.close()
+    return row_id
+
+
+def get_user_stats(user_id: str) -> dict:
+    """返回用户收藏论文数、笔记数、AI 对话次数（用于设置页展示）"""
+    conn = _ensure_db()
+    paper_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM saved_papers WHERE user_id = ?", (user_id,)
+    ).fetchone()["cnt"]
+    note_count = conn.execute(
+        """SELECT COUNT(*) as cnt FROM paper_notes pn
+           JOIN saved_papers sp ON pn.paper_rowid = sp.id
+           WHERE sp.user_id = ?""", (user_id,)
+    ).fetchone()["cnt"]
+    chat_count = conn.execute(
+        """SELECT COUNT(*) as cnt FROM paper_chats pc
+           JOIN saved_papers sp ON pc.paper_rowid = sp.id
+           WHERE sp.user_id = ? AND pc.role = 'user'""", (user_id,)
+    ).fetchone()["cnt"]
+    conn.close()
+    return {"papers": paper_count, "notes": note_count, "chats": chat_count}
+
+
+# ========== Projects ==========
+
+def create_project(user_id: str, name: str, description: str = "") -> int:
+    conn = _ensure_db()
+    cursor = conn.execute(
+        "INSERT INTO projects (user_id, name, description, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, name, description, datetime.now().isoformat())
+    )
+    conn.commit()
+    row_id = cursor.lastrowid
+    conn.close()
+    return row_id
+
+
+def get_projects(user_id: str) -> list[dict]:
+    conn = _ensure_db()
+    rows = conn.execute("""
+        SELECT p.*,
+               (SELECT COUNT(*) FROM saved_papers sp WHERE sp.project_id = p.id AND sp.user_id = ?) as paper_count
+        FROM projects p
+        WHERE p.user_id = ?
+        ORDER BY p.created_at DESC
+    """, (user_id, user_id)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_project(project_id: int, name: str = None, description: str = None) -> bool:
+    conn = _ensure_db()
+    updates = []
+    params = []
+    if name is not None:
+        updates.append("name = ?")
+        params.append(name)
+    if description is not None:
+        updates.append("description = ?")
+        params.append(description)
+    if not updates:
+        conn.close()
+        return False
+    params.append(project_id)
+    conn.execute(f"UPDATE projects SET {', '.join(updates)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_project(project_id: int):
+    conn = _ensure_db()
+    conn.execute("UPDATE saved_papers SET project_id = NULL WHERE project_id = ?", (project_id,))
+    conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    conn.commit()
+    conn.close()
+
+
+def set_paper_project(paper_id: int, project_id: Optional[int]):
+    conn = _ensure_db()
+    conn.execute("UPDATE saved_papers SET project_id = ? WHERE id = ?", (project_id, paper_id))
+    conn.commit()
+    conn.close()
+
+
+def set_paper_has_pdf(paper_id: int, has_pdf: bool):
+    conn = _ensure_db()
+    conn.execute("UPDATE saved_papers SET has_pdf = ? WHERE id = ?", (1 if has_pdf else 0, paper_id))
+    conn.commit()
+    conn.close()
+
+
+def get_paper_owner(paper_id: int) -> Optional[str]:
+    """返回论文所属的 user_id，用于权限校验"""
+    conn = _ensure_db()
+    row = conn.execute("SELECT user_id FROM saved_papers WHERE id = ?", (paper_id,)).fetchone()
+    conn.close()
+    return row["user_id"] if row else None
+
+
+# ========== Enrichment Cache ==========
+
+def _paper_cache_key(paper: dict) -> str:
+    """生成论文唯一缓存键：优先 PMID，其次 DOI"""
+    pmid = (paper.get("pmid") or "").strip()
+    doi = (paper.get("doi") or "").strip()
+    if pmid:
+        return f"pmid:{pmid}"
+    if doi:
+        return f"doi:{doi}"
+    return ""
+
+
+def get_enrichment_cache(paper: dict) -> Optional[dict]:
+    """查找论文的 enrichment 缓存，命中返回 dict，否则 None"""
+    key = _paper_cache_key(paper)
+    if not key:
+        return None
+    conn = _ensure_db()
+    row = conn.execute(
+        "SELECT summary_zh, relevance, key_findings FROM enrichment_cache WHERE paper_key = ?",
+        (key,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    try:
+        findings = json.loads(row["key_findings"])
+    except (json.JSONDecodeError, TypeError):
+        findings = []
+    return {
+        "summary_zh": row["summary_zh"],
+        "relevance": row["relevance"],
+        "key_findings": findings,
+    }
+
+
+def save_enrichment_cache(paper: dict, summary_zh: str, relevance: str, key_findings: list):
+    """保存论文 enrichment 结果到缓存"""
+    key = _paper_cache_key(paper)
+    if not key or not summary_zh:
+        return
+    conn = _ensure_db()
+    conn.execute("""
+        INSERT INTO enrichment_cache (paper_key, summary_zh, relevance, key_findings, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(paper_key) DO UPDATE SET
+            summary_zh = excluded.summary_zh,
+            relevance = excluded.relevance,
+            key_findings = excluded.key_findings,
+            created_at = excluded.created_at
+    """, (key, summary_zh, relevance, json.dumps(key_findings, ensure_ascii=False),
+          datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
