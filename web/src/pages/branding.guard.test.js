@@ -30,3 +30,10 @@ test('account browser screenshots use a unique portable temporary directory', ()
   assert.match(browserCheck, /path: path\.join\(screenshotDir, 'litfinch-account-settings\.png'\)/)
   assert.doesNotMatch(browserCheck, /\/private\/tmp/)
 })
+
+test('plugin confirmation acceptance waits for the actual callback navigation', () => {
+  const browserCheck = source('../../scripts/check-accounts-browser.mjs')
+  const confirmation = browserCheck.slice(browserCheck.indexOf("await page.goto(base + '/settings?device="))
+  assert.ok(confirmation.startsWith("await page.goto(base + '/settings?device="))
+  assert.match(confirmation, /await page\.waitForURL\(base \+ '\/settings\?auth=success'\)[\s\S]*await page\.getByText\('已登录：测试阅读者'[\s\S]*authenticated = false; enabled = false[\s\S]*await page\.reload\(\)/)
+})

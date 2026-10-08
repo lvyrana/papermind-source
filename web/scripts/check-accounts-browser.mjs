@@ -81,21 +81,27 @@ try {
   await page.getByRole('button', { name: '使用 Zotero 账号继续', exact: true }).click().catch(async error => {
     console.log({ errors, screen: await page.locator('body').innerText() }); throw error
   })
+  await page.waitForURL(base + '/settings?auth=success')
   await page.getByText('已登录：测试阅读者', { exact: true }).waitFor()
   assert.equal(starts[0].adopt_legacy, true)
   assert.equal(await page.evaluate(() => localStorage.getItem('paper-notes-77')), '未保存的原始草稿')
   await page.screenshot({ path: path.join(screenshotDir, 'litfinch-account-settings.png'), fullPage: false })
   await page.getByRole('button', { name: '退出账号', exact: true }).click()
+  await page.waitForURL(base + '/settings')
   await page.getByRole('button', { name: '使用 Zotero 账号继续', exact: true }).waitFor()
   assert.equal(await page.evaluate(() => localStorage.getItem('paper-notes-77')), null)
   assert.notEqual(await page.evaluate(() => localStorage.getItem('papermind-uid')), uid)
   await page.getByRole('button', { name: '使用 Zotero 账号继续', exact: true }).click()
+  await page.waitForURL(base + '/settings?auth=success')
   await page.getByText('已登录：测试阅读者', { exact: true }).waitFor()
   assert.equal(await page.evaluate(() => localStorage.getItem('paper-notes-77')), '未保存的原始草稿')
   await page.goto(base + '/settings?device=ABCDEF123456')
   await page.getByRole('heading', { name: '连接 Zotero 插件' }).waitFor()
   await page.getByText('ABCDEF123456', { exact: true }).waitFor()
   await page.getByRole('button', { name: '使用 Zotero 账号继续', exact: true }).click()
+  // This page already shows the logged-in label before confirmation. Wait for
+  // the actual callback document, not that stale label, before reloading it.
+  await page.waitForURL(base + '/settings?auth=success')
   await page.getByText('已登录：测试阅读者', { exact: true }).waitFor()
   assert.equal(starts.at(-1).device_code, 'ABCDEF123456')
   authenticated = false; enabled = false
