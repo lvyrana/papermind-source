@@ -21,3 +21,12 @@ test('display rename preserves existing reading identity and export conventions'
   assert.doesNotMatch(api, /litfinch-uid/i)
   assert.match(source('./Settings.jsx'), /papermind-notes-/)
 })
+
+test('account browser screenshots use a unique portable temporary directory', () => {
+  const browserCheck = source('../../scripts/check-accounts-browser.mjs')
+  assert.match(browserCheck, /import \{ tmpdir \} from 'node:os'/)
+  assert.match(browserCheck, /mkdtemp\(path\.join\(tmpdir\(\), 'litfinch-accounts-'\)\)/)
+  assert.match(browserCheck, /path: path\.join\(screenshotDir, `litfinch-brand-\$\{width\}\.png`\)/)
+  assert.match(browserCheck, /path: path\.join\(screenshotDir, 'litfinch-account-settings\.png'\)/)
+  assert.doesNotMatch(browserCheck, /\/private\/tmp/)
+})

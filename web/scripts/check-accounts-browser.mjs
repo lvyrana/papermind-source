@@ -2,12 +2,15 @@
 /* global process */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { chromium } from 'playwright'
 
 const root = fileURLToPath(new URL('../dist/', import.meta.url))
+const screenshotDir = await mkdtemp(path.join(tmpdir(), 'litfinch-accounts-'))
+console.log(`Synthetic account screenshots: ${screenshotDir}`)
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url, 'http://fixture.test').pathname
   const relative = pathname.startsWith('/assets/') || ['/icon-light.svg', '/icon-192.svg', '/favicon.svg'].includes(pathname)
@@ -67,7 +70,7 @@ try {
       const box = await page.getByRole('link', { name, exact: true }).boundingBox()
       assert.ok(box && box.x >= 0 && box.x + box.width <= width)
     }
-    await page.screenshot({ path: `/private/tmp/litfinch-brand-${width}.png`, fullPage: false, animations: 'disabled' })
+    await page.screenshot({ path: path.join(screenshotDir, `litfinch-brand-${width}.png`), fullPage: false, animations: 'disabled' })
   }
   await page.evaluate(uid => {
     localStorage.setItem('papermind-uid', uid)
@@ -81,7 +84,7 @@ try {
   await page.getByText('已登录：测试阅读者', { exact: true }).waitFor()
   assert.equal(starts[0].adopt_legacy, true)
   assert.equal(await page.evaluate(() => localStorage.getItem('paper-notes-77')), '未保存的原始草稿')
-  await page.screenshot({ path: '/private/tmp/papermind-account-settings.png', fullPage: false })
+  await page.screenshot({ path: path.join(screenshotDir, 'litfinch-account-settings.png'), fullPage: false })
   await page.getByRole('button', { name: '退出账号', exact: true }).click()
   await page.getByRole('button', { name: '使用 Zotero 账号继续', exact: true }).waitFor()
   assert.equal(await page.evaluate(() => localStorage.getItem('paper-notes-77')), null)

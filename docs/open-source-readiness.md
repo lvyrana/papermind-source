@@ -4,9 +4,10 @@
 
 ## 2026-10-08：私有源码同步执行中
 
-- GitHub 实查 `lvyrana/papermind-source` 仍为 PRIVATE，`main` 为 `df5e969`，成功 CI 仍覆盖 9 月 30 日快照。
+- GitHub 实查 `lvyrana/papermind-source` 仍为 PRIVATE。本次起点为 9 月 30 日的 `df5e969`，首轮同步已推送 `602cd8c`，仅含 134 个源码文件与 2 个生成说明文件。
 - 重新导出 133 个白名单源码文件，与 10 月 2 日原始源清单逐项一致，额外文件为 0；旧验收目录内的 node_modules/dist 不复制。新候选与测试 checkout 分开，原开发历史、数据库、问卷、PDF 与独立 Connector 仓库均不进入本次提交。
 - 10 月 8 日复验发现构建链 source-map-js 1.2.1 的新审计告警（high，阻断 CI）。按 [上游 1.2.2 发布](https://github.com/7rulnik/source-map-js/releases/tag/v1.2.2) 定向更新该间接依赖，不对其他依赖强制升级；新增 3 项护栏，旧版同一测试为 1 pass / 2 fail。更新后的候选增加一个源码测试文件，后续以新清单与复验结果为准。
+- 首轮新 [CI 37720796157](https://github.com/lvyrana/papermind-source/actions/runs/37720796157) 的后端 103 项、隔离 HTTP、前端 57 项、构建、lint、完整 npm 审计及合成 PDF 浏览器回归通过；账号浏览器测试因 `/private/tmp` 不存在失败。已改为系统临时目录中的独立截图子目录并补路径护栏，保留原账号断言和沙箱，等待修补后的同一提交完整 CI。
 - 本次只向既有私有源码仓库推送，再等待同一提交的云端验收；不修改可见性、部署镜像、插件公开仓库、安装或线上服务。源码与记录状态验收后更新本节。
 
 ## 2026-10-02：主项目与 Connector 分开发布复核
