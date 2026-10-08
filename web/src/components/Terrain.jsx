@@ -138,7 +138,7 @@ export default function Terrain({
       {/* corner labels */}
       {v.showCorners && (
         <>
-          <span className="absolute top-3 left-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">papermind · landscape</span>
+          <span className="absolute top-3 left-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">LitFinch · landscape</span>
           {dateLabel && <span className="absolute top-3 right-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">{dateLabel}</span>}
           <span className="absolute bottom-3 left-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">stage 0 · v0.1</span>
           <span className="absolute bottom-3 right-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">scale ≈ tag</span>

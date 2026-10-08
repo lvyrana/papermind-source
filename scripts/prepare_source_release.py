@@ -9,7 +9,7 @@ from check_public_release import check, inspect_file, private_path
 ROOT_FILES = {"README.md", "CHANGELOG.md", "DECISIONS.md", "THIRD_PARTY_NOTICES.md",
               "LICENSE", "LICENSE.md", "LICENSE.txt", ".gitignore", ".gitattributes"}
 PUBLIC_DOCS = {"docs/trial-guide.md", "docs/deep-reading-overview.md", "docs/chinese-reading-validation.md",
-               "docs/open-source-readiness.md", "docs/deployment-recovery.md"}
+               "docs/open-source-readiness.md", "docs/deployment-recovery.md", "docs/zotero-login.md"}
 ROOTS = {"web", "papermind", "scripts", "tests", "deploy", ".github", "zotero-plugin"}
 
 

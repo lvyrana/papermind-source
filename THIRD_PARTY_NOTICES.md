@@ -34,6 +34,8 @@ PaperMind 主项目原创代码采用 [AGPL-3.0-only](LICENSE)。本文件列明
 
 PDF.js 同时声明可选 Node 依赖 `@napi-rs/canvas`（当前锁定 1.0.9，MIT）及平台二进制包；本阅读器使用浏览器 canvas，不把 Node 原生模块作为运行路径。若另行分发 `node_modules` 或原生二进制，仍须核对它们携带的第三方许可，不能以此清单代替完整声明。
 
+构建链间接依赖 [source-map-js](https://github.com/7rulnik/source-map-js) 为 BSD-3-Clause；2026-10-08 将锁定版本从 1.2.1 更新到上游修正版 1.2.2，处理 GHSA-68fv-2mgg-jv7q。现有纯源码导出不带安装目录；构建/安装包仍需保留其实际许可正文。9 月 28 日收集记录是当时环境，不代表后续依赖版本未变化。
+
 ## 后端直接依赖
 
 | 库 | 许可证 | 用途 |

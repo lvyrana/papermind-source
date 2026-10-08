@@ -393,7 +393,7 @@ export default function Home() {
           <h1 className="pm-page-title text-[36px] sm:text-[40px] text-navy leading-[1.15] m-0">{greeting}</h1>
           {memoryRecent && (
             <div className="mt-4 sm:mt-5 max-w-[660px] flex flex-col sm:flex-row items-start gap-1 sm:gap-2.5 text-[13px] leading-[1.75]">
-              <span className="text-coral/75 mt-0.5 shrink-0 whitespace-nowrap">papermind 还记得</span>
+              <span className="text-coral/75 mt-0.5 shrink-0 whitespace-nowrap">研雀还记得</span>
               <span className="text-navy/70">
                 <span className={memoryExpanded ? '' : 'line-clamp-2'}>{memoryRecent}</span>
                 {memoryRecent.length > 42 && (
@@ -461,7 +461,7 @@ export default function Home() {
               </p>
               <h2 className="font-serif text-[24px] font-medium text-navy m-0 leading-[1.35]">
                 {papers.length > 0
-                  ? <>papermind 在你的方向附近<br/>找到这 {papers.length} 篇</>
+                  ? <>研雀在你的方向附近<br/>找到这 {papers.length} 篇</>
                   : '为你探索'}
               </h2>
             </div>
@@ -546,10 +546,10 @@ export default function Home() {
               still tracking · {threads.length} open
             </p>
             <h2 className="font-serif text-[22px] font-medium text-navy m-0 leading-[1.35]">
-              papermind 还在替你 hold 这些
+              研雀还在替你 hold 这些
             </h2>
             <p className="m-0 mt-2 text-[13.5px] text-warm-gray leading-[1.75] max-w-[620px]">
-              你开始读但没追下去的、问了一句就停的、收藏了还没翻的 — papermind 替你记着，
+              你开始读但没追下去的、问了一句就停的、收藏了还没翻的 — 研雀替你记着，
               你想回去看的时候随时翻牌。
             </p>
 
@@ -985,7 +985,7 @@ function MobileHome({
     <main className="lg:hidden px-4 pt-16 pb-24">
       <section className="mb-7">
         <p className="text-[10px] uppercase tracking-[0.22em] font-mono text-coral mb-2">
-          papermind · for you
+          LitFinch · for you
         </p>
         <h1 className="font-serif text-[32px] font-medium text-navy leading-tight m-0">{greeting}</h1>
         <p className="mt-4 text-[14px] leading-[1.85] text-navy/70 m-0">

@@ -13,6 +13,7 @@ ExecStart=/opt/papermind/papermind/.venv/bin/uvicorn api:app \
     --host 127.0.0.1 \
     --port 8000 \
     --workers 1 \
+    --no-access-log \
     --log-level info
 
 # 崩溃后自动重启

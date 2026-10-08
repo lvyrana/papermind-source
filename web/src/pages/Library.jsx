@@ -454,7 +454,7 @@ function PortraitCard({ portrait }) {
         <div className="mt-5 pt-4 border-t border-warm-white/12">
           <button onClick={() => setOpen(o => !o)}
             className="flex items-center gap-1.5 text-[11px] text-warm-white/60 hover:text-warm-white/90 transition">
-            {open ? '收起记忆' : 'papermind 记住的你'}
+            {open ? '收起记忆' : '研雀记住的你'}
             <span className={`transition-transform ${open ? 'rotate-90' : ''}`}>›</span>
           </button>
 

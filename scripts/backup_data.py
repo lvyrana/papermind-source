@@ -14,6 +14,7 @@ import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+OPTIONAL_DATABASES = ("runtime-limits/daily.sqlite3", "auth.sqlite3")
 
 
 def digest(path):
@@ -26,7 +27,7 @@ def digest(path):
 
 def safe_name(name):
     parts = PurePosixPath(name).parts
-    return (name in ("paperdiary.db", "runtime-limits/daily.sqlite3") or (len(parts) > 1 and parts[0] in ("pdfs", "figures"))) \
+    return (name in ("paperdiary.db", *OPTIONAL_DATABASES) or (len(parts) > 1 and parts[0] in ("pdfs", "figures"))) \
         and all(part not in (".", "..") for part in parts) and "\\" not in name \
         and not name.startswith("/")
 
@@ -77,8 +78,9 @@ def verify(backup):
         if path.stat().st_size != metadata["bytes"] or digest(path) != metadata["sha256"]:
             raise ValueError("Backup hash or size mismatch")
     integrity(backup / "paperdiary.db")
-    if "runtime-limits/daily.sqlite3" in manifest["files"]:
-        integrity(backup / "runtime-limits/daily.sqlite3")
+    for name in OPTIONAL_DATABASES:
+        if name in manifest["files"]:
+            integrity(backup / name)
     return manifest
 
 
@@ -99,6 +101,7 @@ def create(data, destination, include_files=True):
         # This avoids silently deleting the only useful recovery point.
         estimated = (data / "paperdiary.db").stat().st_size + sum(size for size, _ in before.values())
         estimated += sum(path.stat().st_size for path in data.glob("paperdiary.db-wal"))
+        estimated += sum((data / name).stat().st_size for name in OPTIONAL_DATABASES if (data / name).exists())
         budget_mb = int(os.environ.get("PAPERMIND_BACKUP_MAX_MB", "10240"))
         if budget_mb < 1:
             raise ValueError("PAPERMIND_BACKUP_MAX_MB must be positive")
@@ -110,12 +113,12 @@ def create(data, destination, include_files=True):
         with ExitStack() as stack:
             sources = []
             names = ["paperdiary.db"]
-            counter = data / "runtime-limits/daily.sqlite3"
-            counter_present = counter.exists()
-            if counter.is_symlink() or counter.parent.is_symlink():
-                raise ValueError("Refusing linked budget state")
-            if counter_present:
-                names.append("runtime-limits/daily.sqlite3")
+            optional_present = {name: (data / name).exists() for name in OPTIONAL_DATABASES}
+            for name, present in optional_present.items():
+                if (data / name).is_symlink() or (data / name).parent.is_symlink():
+                    raise ValueError("Refusing linked authentication or budget state")
+                if present:
+                    names.append(name)
             for name in names:
                 source = stack.enter_context(closing(sqlite3.connect((data / name).as_uri() + "?mode=ro", uri=True)))
                 sources.append((source, source.execute("PRAGMA data_version").fetchone()[0]))
@@ -123,7 +126,20 @@ def create(data, destination, include_files=True):
                 target_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 with closing(sqlite3.connect(target_path)) as target:
                     source.backup(target)
-                    target.execute("PRAGMA journal_mode=DELETE")
+                # Reopen after backup to read the copied file's journal mode.
+                with closing(sqlite3.connect(target_path)) as target:
+                    mode = target.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+                    if mode.lower() != "delete":
+                        raise RuntimeError("Backup database must not retain a live WAL journal")
+                # Some SQLite builds leave an orphan SHM after WAL -> DELETE.
+                # Only clean sidecars of this closed, newly created stage DB;
+                # a non-empty WAL means the snapshot cannot be published.
+                wal = Path(str(target_path) + "-wal")
+                shm = Path(str(target_path) + "-shm")
+                if wal.exists() and wal.stat().st_size:
+                    raise RuntimeError("Backup database has uncheckpointed WAL data")
+                wal.unlink(missing_ok=True)
+                shm.unlink(missing_ok=True)
                 os.chmod(target_path, 0o600)
             for name in before:
                 target = stage / name
@@ -131,7 +147,8 @@ def create(data, destination, include_files=True):
                 shutil.copyfile(data / name, target)
                 os.chmod(target, 0o600)
             if any(revision != source.execute("PRAGMA data_version").fetchone()[0] for source, revision in sources) \
-                    or counter_present != counter.exists() or before != file_inventory(data, include_files):
+                    or any(present != (data / name).exists() for name, present in optional_present.items()) \
+                    or before != file_inventory(data, include_files):
                 raise RuntimeError("Data changed during backup; retry in a quiet window or stop the service")
         files = {}
         for path in sorted(stage.rglob("*")):
@@ -140,7 +157,7 @@ def create(data, destination, include_files=True):
         manifest = {"format": "papermind-backup-v1", "created_at": datetime.now(timezone.utc).isoformat(),
                     "includes_files": include_files, "files": files,
                     "excluded": ["config.json", ".env", "trial-access.json", "runtime-limits/*.lock"],
-                    "restore_requires": "Re-authorize trial UUIDs against CURRENT consent; do not replay old invitation grants.",
+                    "restore_requires": "Preserve account ownership. Sessions and pending logins are revoked on restore. Re-authorize trial UUIDs against CURRENT consent.",
                     "consistency": "no observed DB/file changes during snapshot"}
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         os.chmod(stage / "manifest.json", 0o600)
@@ -171,8 +188,17 @@ def restore(backup, destination):
             if digest(target) != manifest["files"][name]["sha256"]:
                 raise ValueError("Restore verification failed")
         integrity(stage / "paperdiary.db")
-        if "runtime-limits/daily.sqlite3" in manifest["files"]:
-            integrity(stage / "runtime-limits/daily.sqlite3")
+        for name in OPTIONAL_DATABASES:
+            if name in manifest["files"]:
+                integrity(stage / name)
+        if "auth.sqlite3" in manifest["files"]:
+            # Keep ownership, but never resurrect a previously revoked session.
+            with closing(sqlite3.connect(stage / "auth.sqlite3")) as auth_db:
+                auth_db.execute("PRAGMA secure_delete=ON")
+                for table in ("sessions", "flows", "devices", "attempts"):
+                    auth_db.execute(f"DELETE FROM {table}")
+                auth_db.commit()
+            integrity(stage / "auth.sqlite3")
         destination.mkdir(mode=0o700)
         try:
             for item in stage.iterdir():

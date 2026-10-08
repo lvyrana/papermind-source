@@ -24,6 +24,9 @@ __pycache__/
 # 本地备份产物
 backups/
 
+# 私有源码验收候选，不重复纳入源码导出或公开历史
+/release-candidates/
+
 # 独立维护的 Connector 仓库，不打包进主项目
 /papermind-zotero/
 

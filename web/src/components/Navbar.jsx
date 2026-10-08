@@ -21,9 +21,9 @@ export default function Navbar() {
         display: 'flex',
       }}
     >
-      <Link to="/" className="flex items-center gap-3 text-navy shrink-0">
+      <Link to="/" aria-label="研雀 · LitFinch 首页" className="flex items-center gap-3 text-navy shrink-0">
         <img src="/icon-light.svg" alt="" className="h-8 w-8 rounded-xl shadow-[0_6px_18px_rgba(30,58,95,0.08)]" />
-        <span className="hidden sm:inline font-serif text-[21px] font-semibold tracking-[0.08em] leading-none">papermind</span>
+        <span className="hidden sm:inline font-serif text-[21px] font-semibold tracking-[0.04em] leading-none">研雀 <span className="text-base">· LitFinch</span></span>
       </Link>
       <div className="flex-1 flex items-center justify-center gap-0.5 sm:gap-1.5 min-w-0">
         <DesktopNavItem to="/" icon={<Home size={15} />} label="首页" active={location.pathname === '/'} />

@@ -8,6 +8,9 @@ import Settings from './pages/Settings'
 import Library from './pages/Library'
 import LibraryDetail from './pages/LibraryDetail'
 import { setUserId, consumeUidSwitchFlag } from './api'
+import AccountGate from './components/AccountGate'
+import { useAccount } from './accountContext'
+import { switchAccountCache } from './auth'
 
 const CACHE_KEY_PREFIXES = ['paper-notes-', 'paper-chat-', 'paper-bookmark-']
 const CACHE_KEY_EXACT = [
@@ -36,24 +39,30 @@ function clearLocalAccountCache() {
 }
 
 function UidHandler() {
+  const account = useAccount()
   const navigate = useNavigate()
   const location = useLocation()
   useEffect(() => {
+    if (account?.authenticated) return
     const params = new URLSearchParams(location.search)
     const uid = params.get('uid')
     if (!uid || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uid)) return
-    if (consumeUidSwitchFlag()) clearLocalAccountCache()
+    // AccountGate archives/restores caches before child pages mount. Keep the
+    // old clearing implementation available, but do not erase restored drafts.
+    const USE_LEGACY_CACHE_CLEAR = false
+    if (consumeUidSwitchFlag() && USE_LEGACY_CACHE_CLEAR) clearLocalAccountCache()
     setUserId(uid)
+    switchAccountCache(`guest:${uid}`)
     params.delete('uid')
     const search = params.toString()
     navigate(`${location.pathname}${search ? `?${search}` : ''}${location.hash}`, { replace: true })
-  }, [location.search, location.pathname, location.hash, navigate])
+  }, [location.search, location.pathname, location.hash, navigate, account?.authenticated])
   return null
 }
 
 function App() {
   return (
-    <div className="min-h-screen bg-cream bg-flowing">
+    <AccountGate><div className="min-h-screen bg-cream bg-flowing">
       <UidHandler />
       <Routes>
         <Route path="/" element={<Home />} />
@@ -64,7 +73,7 @@ function App() {
         <Route path="/library" element={<Library />} />
         <Route path="/library/:id" element={<LibraryDetail />} />
       </Routes>
-    </div>
+    </div></AccountGate>
   )
 }
 

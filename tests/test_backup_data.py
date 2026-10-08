@@ -68,6 +68,22 @@ class BackupTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             backup_data.create(self.data, self.root)
 
+    def test_account_ownership_restored_without_resurrecting_sessions(self):
+        with sqlite3.connect(self.data / "auth.sqlite3") as auth_db:
+            auth_db.execute("CREATE TABLE accounts (id TEXT)")
+            auth_db.execute("INSERT INTO accounts VALUES ('owner-fixture')")
+            for table in ("sessions", "flows", "devices", "attempts"):
+                auth_db.execute(f"CREATE TABLE {table} (value TEXT)")
+                auth_db.execute(f"INSERT INTO {table} VALUES ('expired-fixture')")
+        snapshot = backup_data.create(self.data, self.backups)
+        self.assertIn("auth.sqlite3", backup_data.verify(snapshot)["files"])
+        restored = backup_data.restore(snapshot, self.root / "restored")
+        with sqlite3.connect(restored / "auth.sqlite3") as auth_db:
+            self.assertEqual(auth_db.execute("SELECT id FROM accounts").fetchone()[0], "owner-fixture")
+            for table in ("sessions", "flows", "devices", "attempts"):
+                self.assertEqual(auth_db.execute(f"SELECT count(*) FROM {table}").fetchone()[0], 0)
+        self.assertEqual((restored / "auth.sqlite3").stat().st_mode & 0o777, 0o600)
+
     def test_low_disk_space_refuses_copy_without_deleting_old_backups(self):
         snapshot = backup_data.create(self.data, self.backups)
         with patch.object(backup_data.shutil, "disk_usage", return_value=SimpleNamespace(free=0)):

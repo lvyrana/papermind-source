@@ -5,6 +5,8 @@ import {
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import Navbar from '../components/Navbar'
+import { AccountCard } from '../components/AccountGate'
+import { useAccount } from '../accountContext'
 import { getUserId, clearUserId, API_BASE, apiGet, apiPost, apiDelete } from '../api'
 
 /* ─────────────────────────────────────────────────────────────
@@ -108,6 +110,8 @@ const SHOW_PREFERENCES = false
 // MAIN
 // ═════════════════════════════════════════════════════════════
 export default function Settings() {
+  const account = useAccount()
+  const aiNeedsLogin = account?.ai_login_required && !account?.authenticated
   // ── research prefs (NEW) ──
   const [profile, setProfile] = useState(() => {
     try {
@@ -250,6 +254,7 @@ export default function Settings() {
       </header>
 
       <main className="px-6 max-w-2xl lg:max-w-[860px] mx-auto space-y-1.5">
+        <AccountCard />
 
         {/* ─── 研究偏好（主动填写偏好入口，产品转向后隐藏；置 SHOW_PREFERENCES=true 恢复）─── */}
         {SHOW_PREFERENCES && (
@@ -278,7 +283,7 @@ export default function Settings() {
               <p className="text-xs text-warm-gray mt-0.5">由系统统一提供，无需配置</p>
             </div>
             <div className="flex items-center gap-1.5 text-xs text-mint flex-shrink-0">
-              <span className="w-1.5 h-1.5 rounded-full bg-mint inline-block" />运行正常
+              <span className="w-1.5 h-1.5 rounded-full bg-mint inline-block" />{aiNeedsLogin ? '登录后使用' : '内置服务'}
             </div>
           </div>
 
@@ -301,7 +306,7 @@ export default function Settings() {
           <div className="space-y-1.5 text-xs text-warm-gray">
             <div className="flex items-start gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-mint mt-1 flex-shrink-0" />
-              <span>AI 论文解读、翻译、对话均已可用</span>
+              <span>{aiNeedsLogin ? '使用上方 Zotero 登录后，可发起 AI 解读、翻译和对话。' : '支持论文解读、翻译和对话。'}</span>
             </div>
             <div className="flex items-start gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-mint mt-1 flex-shrink-0" />
@@ -334,7 +339,7 @@ export default function Settings() {
           </div>
         </div>
 
-        <div className="bg-warm-white/[0.82] backdrop-blur-sm rounded-2xl p-5 border border-cream-dark/[0.7]">
+        {!account?.authenticated && <div className="bg-warm-white/[0.82] backdrop-blur-sm rounded-2xl p-5 border border-cream-dark/[0.7]">
           <div className="flex items-center gap-3 mb-3">
             <IconBlock icon={Link2} color="gray" />
             <div className="flex-1 min-w-0">
@@ -351,7 +356,7 @@ export default function Settings() {
             {linkCopied ? <Check size={13} /> : <Link2 size={13} />}
             {linkCopied ? '链接已复制' : '复制同步链接'}
           </button>
-        </div>
+        </div>}
 
         {/* ─── 偏好设置（隐私）─── */}
         <SectionLabel>隐私与安全</SectionLabel>
@@ -360,10 +365,10 @@ export default function Settings() {
             <IconBlock icon={Shield} color="gray" />
             <div className="flex-1 min-w-0">
               <h2 className="text-navy font-semibold text-sm">隐私与安全</h2>
-              <p className="text-xs text-warm-gray mt-0.5">数据保存在运行 PaperMind 的服务器上</p>
+              <p className="text-xs text-warm-gray mt-0.5">数据保存在运行研雀的服务器上</p>
             </div>
           </div>
-          <div className="flex items-start justify-between gap-4 py-3 border-t border-cream-dark/60">
+          {!account?.authenticated && <><div className="flex items-start justify-between gap-4 py-3 border-t border-cream-dark/60">
             <div>
               <p className="text-sm font-medium text-navy">匿名设备编号</p>
               <p className="text-xs text-warm-gray mt-0.5">用于区分各设备的数据，同步链接包含该编号，请勿公开分享</p>
@@ -378,7 +383,7 @@ export default function Settings() {
               className="flex-shrink-0 px-4 py-1.5 rounded-xl border border-coral/40 text-coral text-xs hover:bg-coral/5 transition-colors">
               退出设备
             </button>
-          </div>
+          </div></>}
         </div>
 
         {/* ─── 用户反馈 ─── */}
@@ -454,7 +459,7 @@ function ResearchPrefsCard({ profile, patchProfile, onSave, saved, saveError }) 
         <IconBlock icon={Sparkles} color="coral"/>
         <div className="flex-1 min-w-0">
           <h2 className="text-navy font-semibold text-sm">研究偏好</h2>
-          <p className="text-xs text-warm-gray mt-0.5">这些字段决定 papermind 给你推荐什么 · 改完点保存</p>
+          <p className="text-xs text-warm-gray mt-0.5">这些字段决定研雀给你推荐什么 · 改完点保存</p>
         </div>
         <span className="text-[10px] uppercase tracking-[0.22em] font-mono text-warm-gray hidden sm:block">manual</span>
       </header>

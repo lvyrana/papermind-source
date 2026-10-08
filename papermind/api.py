@@ -82,6 +82,7 @@ from pdf_proxy import fetch_public_pdf
 from runtime_limits import completion_async, RuntimeLimitError
 from trial_access import allowed as trial_allowed
 from storage_limits import upload_transaction
+import auth as account_auth
 
 # 加载 .env
 load_dotenv(Path(__file__).parent / ".env")
@@ -100,6 +101,7 @@ if _sentry_dsn:
     )
 
 app = FastAPI(title="PaperMind API")
+app.include_router(account_auth.router)
 
 # 生产环境在 .env 中设置 ALLOWED_ORIGINS=https://yourdomain.com
 # 不设置则默认允许所有来源（开发用）
@@ -289,7 +291,13 @@ def _content_disposition(title: str, ext: str) -> str:
 # ========== User ID ==========
 
 def _get_user_id(request: Request) -> str:
-    """读取并校验匿名设备 ID；同源媒体请求可从 cookie 回退。"""
+    """Verified sessions take priority; claimed namespaces reject legacy links."""
+    account = account_auth.identity(request)
+    if account:
+        user_id = account["data_uid"]
+        if not trial_allowed(user_id, OWNER_UID):
+            raise FastAPIHTTPException(status_code=403, detail="试用邀请已到期或未获授权，请联系维护者。")
+        return user_id
     headers = getattr(request, "headers", {})
     cookies = getattr(request, "cookies", {})
     user_id = (headers.get("X-User-ID", "") or cookies.get("papermind-uid", "")).strip().lower()
@@ -299,6 +307,8 @@ def _get_user_id(request: Request) -> str:
         raise FastAPIHTTPException(status_code=401, detail="valid device id required")
     if str(parsed) != user_id or parsed.version != 4:
         raise FastAPIHTTPException(status_code=401, detail="valid device id required")
+    if account_auth.namespace_claimed(user_id):
+        raise FastAPIHTTPException(status_code=401, detail="这份记录已关联账号，请使用 Zotero 登录。")
     if not trial_allowed(user_id, OWNER_UID):
         raise FastAPIHTTPException(status_code=403, detail="试用邀请已到期或未获授权，请联系维护者。")
     return user_id
@@ -307,6 +317,22 @@ def _get_user_id(request: Request) -> str:
 @app.middleware("http")
 async def trial_admission(request: Request, call_next):
     public_routes = {"/api/zotero-plugin/update.json", "/api/zotero-plugin/papermind-connector.xpi"}
+    if request.url.path.startswith("/api/auth/"):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+    if request.url.path.startswith("/api/") and request.method != "OPTIONS":
+        try:
+            account = account_auth.identity(request)  # cookie CSRF check also covers non-user routes
+            ai_path = request.url.path in {"/api/chat", "/api/chat/summarize", "/api/translate", "/api/deep-read/guide",
+                "/api/ocr/selection", "/api/cards/draft", "/api/papers", "/api/profile/interests-summary",
+                "/api/memory/refresh-stated", "/api/memory/rebuild-core", "/api/profile/memory-recent",
+                "/api/profile/merge-to-core", "/api/settings/test"} or bool(re.fullmatch(r"/api/self-test/\d+/(ask|answer)", request.url.path))
+            if account_auth.ai_login_required() and ai_path and not account:
+                raise FastAPIHTTPException(401, "使用内置 AI 前，请先使用 Zotero 账号登录。")
+        except FastAPIHTTPException as error:
+            return JSONResponse({"detail": error.detail, "ok": False}, status_code=error.status_code)
     if os.environ.get("PAPERMIND_INVITE_ONLY", "").lower() == "true" \
             and request.url.path.startswith("/api/") and request.url.path not in public_routes \
             and request.method != "OPTIONS":
@@ -577,7 +603,7 @@ def api_save_profile(data: ProfileData, request: Request):
         _reset_user_cache(uid)
 
     # 首次生成长期骨架：放后台线程，不阻塞保存响应
-    if not previous.get("memory_core", "").strip():
+    if not previous.get("memory_core", "").strip() and account_auth.can_use_ai(request):
         def _bg_init_core():
             try:
                 asyncio.run(ensure_memory_core(uid, get_profile(uid)))
@@ -1396,7 +1422,7 @@ def api_save_to_library(data: SavePaperRequest, request: Request):
             save_chat_message(row_id, role, content)
 
     # 手动添加的论文（无 summary_zh）触发后台解读
-    if not data.paper.get("summary_zh") and data.paper.get("abstract"):
+    if not data.paper.get("summary_zh") and data.paper.get("abstract") and account_auth.can_use_ai(request):
         profile = get_profile(uid)
         t = threading.Thread(
             target=_bg_enrich_saved_paper,

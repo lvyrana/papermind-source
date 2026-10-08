@@ -221,7 +221,7 @@ export default function Profile() {
               ) : profile.memory_core ? (
                 <p className="text-[13.5px] leading-7 text-navy/82 m-0 font-serif">{profile.memory_core}</p>
               ) : (
-                <p className="text-[12.5px] leading-7 text-warm-gray/55 m-0 italic">使用一段时间后，papermind 会从你的阅读中归纳出长期画像。</p>
+                <p className="text-[12.5px] leading-7 text-warm-gray/55 m-0 italic">使用一段时间后，研雀会从你的阅读中归纳出长期画像。</p>
               )}
             </div>
 
@@ -253,7 +253,7 @@ export default function Profile() {
                 </>
               ) : (
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-[12.5px] leading-7 text-warm-gray/55 m-0 italic">papermind 还在观察你最近的阅读…</p>
+                  <p className="text-[12.5px] leading-7 text-warm-gray/55 m-0 italic">研雀还在观察你最近的阅读…</p>
                   <button type="button" onClick={refreshRecent} disabled={refreshingRecent}
                     className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11.5px] text-warm-gray/70 hover:text-navy border border-cream-dark transition-colors disabled:opacity-50">
                     {refreshingRecent ? '观察中…' : '现在观察一次'}
@@ -416,7 +416,7 @@ function Terrain({ hills, trails, dateLabel }) {
       </svg>
 
       {/* corner labels */}
-      <span className="absolute top-3 left-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">papermind · landscape</span>
+      <span className="absolute top-3 left-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">LitFinch · landscape</span>
       <span className="absolute top-3 right-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">{dateLabel}</span>
       <span className="absolute bottom-3 left-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">stage 0 · v0.1</span>
       <span className="absolute bottom-3 right-4 text-[9px] uppercase tracking-[0.2em] font-mono text-warm-gray pointer-events-none">scale ≈ tag</span>

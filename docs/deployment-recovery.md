@@ -2,6 +2,10 @@
 
 更新：2026-09-28。本地未发布改动；服务器尚未更新。唯一开源进度入口为 [open-source-readiness.md](open-source-readiness.md)。
 
+2026-09-30 追加：账号登录为本地候选，启用方法见 [Zotero 登录](zotero-login.md)。启用后已关联空间必须登录；`/api/auth/` 不受邀请中间件阻断，业务准入仍独立校验。已存在的 `auth.sqlite3` 纳入备份；恢复保留账号归属但清空会话与待授权流程。旧备份若没有账号归属库，不能直接替代已经启用账号的服务。
+
+配套 Nginx 模板新增 `nginx-auth-location.conf`，只对 OAuth 回调关闭访问日志；systemd 启动关闭重复的 uvicorn access log，其他 HTTP 访问仍由 Nginx 记录。已有线上配置不会自动更新，正式启用前需安装该 include、核对 HTTPS server 块并运行 `nginx -t`；本次未在服务器执行。
+
 ## 环境与检查
 
 后端使用 Python 3.12，Linux/macOS 的文件锁提供跨进程预算与上传配额互斥；Windows 服务端使用 WSL2。前端使用 Node 22.13+（22.x）或 Node 24.x LTS。浏览器端不需要这些运行时。

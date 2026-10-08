@@ -52,7 +52,7 @@ function Stepbar({ step, onSkip }) {
     <div className="max-w-[1280px] mx-auto px-12 pt-7 flex items-center justify-between relative z-10">
       <div className="flex items-center gap-2.5">
         <SproutIcon size={30}/>
-        <span className="text-base font-medium tracking-wider" style={{ fontFamily: '"Noto Serif SC", serif' }}>papermind</span>
+        <span className="text-base font-medium tracking-wider" style={{ fontFamily: '"Noto Serif SC", serif' }}>研雀 · LitFinch</span>
       </div>
       <div className="hidden md:flex gap-7 font-mono text-[10px] tracking-[0.22em] uppercase text-warm-gray">
         {labels.map((l, i) => (
@@ -194,14 +194,14 @@ function StepSource({ onPickZotero, onPickFresh }) {
   return (
     <Stage>
       <FadeUp delay={0} className="max-w-[720px]">
-        <p className="font-mono text-[11px] tracking-[0.25em] uppercase text-coral mb-4">papermind · 第一次见面</p>
+        <p className="font-mono text-[11px] tracking-[0.25em] uppercase text-coral mb-4">研雀 · 第一次见面</p>
         <h1 className="text-[38px] sm:text-[46px] font-medium leading-[1.25] tracking-wide m-0 mb-5 text-navy" style={{ fontFamily: '"Noto Serif SC", serif' }}>
           把你的研究世界<br/>
           <span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]">带进来</span>。
         </h1>
         <p className="text-[15.5px] leading-[1.85] text-navy/70 max-w-[620px] m-0">
-          papermind 不是又一个搜论文的工具，是一个会记得你的研究助手。
-          如果你已经有 Zotero 库，几秒钟内 papermind 就能从中读出你的研究地形 —
+          研雀不是又一个搜论文的工具，是一个会记得你的研究助手。
+          如果你已经有 Zotero 库，几秒钟内研雀就能从中读出你的研究地形 —
           那是你过去几年阅读痕迹的样子。
         </p>
       </FadeUp>
@@ -223,7 +223,7 @@ function StepSource({ onPickZotero, onPickFresh }) {
           </div>
           <p className="text-[14px] leading-[1.8] text-navy/70 m-0 mb-5">
             导入 <Code>.bib</Code> / <Code>.ris</Code> / <Code>.csl-json</Code>，或通过 Zotero Web API 连接。
-            papermind 会读出你的研究方向、方法兴趣、被忽略的话题，画出第一张地形。
+            研雀会读出你的研究方向、方法兴趣、被忽略的话题，画出第一张地形。
           </p>
           <ul className="list-none p-0 m-0 text-[13.5px] leading-[2] text-navy/70 mb-5">
             <li><GreenDot/> 自动聚类 → 长期画像主轮廓</li>
@@ -242,7 +242,7 @@ function StepSource({ onPickZotero, onPickFresh }) {
         <div className="rounded-[22px] bg-warm-white/55 border border-dashed border-navy/15 px-7 py-8 flex flex-col">
           <h3 className="m-0 text-lg font-medium" style={{ fontFamily: '"Noto Serif SC", serif' }}>从零开始也可以</h3>
           <p className="m-0 mt-3 text-[13.5px] leading-[1.8] text-navy/65">
-            告诉 papermind 你最近在追什么，它会先用一个轻量画像帮你推荐论文。
+            告诉研雀你最近在追什么，它会先用一个轻量画像帮你推荐论文。
             <br/>
             <span className="text-warm-gray text-[12.5px]">地形会随你阅读 / 收藏 / 提问慢慢生长。</span>
           </p>
@@ -253,7 +253,7 @@ function StepSource({ onPickZotero, onPickFresh }) {
       </FadeUp>
 
       <FadeUp delay={400} className="mt-10 text-center text-[12.5px] text-warm-gray">
-        papermind 不会把你的文献库上传到第三方。所有解析都在本地或你自己的 papermind 实例完成。
+        研雀不会把你的文献库上传到第三方。所有解析都在本地或你自己的研雀实例完成。
       </FadeUp>
     </Stage>
   )
@@ -292,7 +292,7 @@ function StepImport({ onParse, onBack }) {
   return (
     <Stage>
       <FadeUp delay={0} className="max-w-[720px] mb-9">
-        <p className="font-mono text-[11px] tracking-[0.25em] uppercase text-coral mb-4">step 02 · 把库交给 papermind</p>
+        <p className="font-mono text-[11px] tracking-[0.25em] uppercase text-coral mb-4">step 02 · 把库交给研雀</p>
         <h1 className="text-[34px] sm:text-[38px] font-medium leading-[1.25] tracking-wide m-0 mb-5 text-navy" style={{ fontFamily: '"Noto Serif SC", serif' }}>
           从 Zotero <span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]">导出</span>，拖进来就行。
         </h1>
@@ -300,7 +300,7 @@ function StepImport({ onParse, onBack }) {
           在 Zotero 选中你的整个 library 或某个 collection，右键 →
           <em className="not-italic text-navy/85"> Export Library… </em>
           选择 <Code>Better BibTeX</Code> / <Code>RIS</Code> / <Code>CSL JSON</Code>，把文件拖到下面的方框。
-          papermind 在你本地解析，不会上传到第三方。
+          研雀在你本地解析，不会上传到第三方。
         </p>
       </FadeUp>
 
@@ -372,7 +372,7 @@ function StepImport({ onParse, onBack }) {
           <p className="mt-5 text-[12.5px] text-warm-gray leading-relaxed">
             在 <a href="https://www.zotero.org/settings/keys" target="_blank" rel="noreferrer" className="text-coral hover:underline">
               zotero.org/settings/keys <ExternalLink size={10} className="inline ml-0.5"/>
-            </a> 创建一个只读 key。papermind 只会读取你的 library 元数据，不会修改任何内容。也支持 group library。
+            </a> 创建一个只读 key。研雀只会读取你的 library 元数据，不会修改任何内容。也支持 group library。
           </p>
           <PrimaryBtn
             className="mt-5"
@@ -489,7 +489,7 @@ function StepParsing({ payload, onDone }) {
   return (
     <Stage className="text-center items-center">
       <FadeUp delay={0} className="max-w-[600px]">
-        <p className="font-mono text-[11px] tracking-[0.25em] uppercase text-coral mb-4">step 03 · papermind 正在读你的世界</p>
+        <p className="font-mono text-[11px] tracking-[0.25em] uppercase text-coral mb-4">step 03 · 研雀正在读你的世界</p>
         <h1 className="text-[32px] sm:text-[36px] font-medium leading-[1.25] tracking-wide m-0 mb-5 text-navy" style={{ fontFamily: '"Noto Serif SC", serif' }}>
           {phase === 'done'
             ? <>读完了。<span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]">正在画地形…</span></>
@@ -549,12 +549,12 @@ function StepReveal({ payload, onNext, onBack }) {
       <FadeUp delay={0} className="max-w-[720px] mb-7">
         <p className="font-mono text-[11px] tracking-[0.25em] uppercase text-coral mb-4">step 04 · 地形浮现</p>
         <h1 className="text-[34px] sm:text-[38px] font-medium leading-[1.25] tracking-wide m-0 mb-5 text-navy" style={{ fontFamily: '"Noto Serif SC", serif' }}>
-          这是 papermind 从你 {payload?.entryCount ?? '247'} 篇文献里<br/>
+          这是研雀从你 {payload?.entryCount ?? '247'} 篇文献里<br/>
           读出的<span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]"> 研究世界</span>。
         </h1>
         <p className="text-base leading-[1.85] text-navy/70 m-0">
           每座山是一个研究方向，山越厚说明你在那里积累得越多。
-          coral 色的小芽是 papermind 觉得你最近在变热的话题。
+          coral 色的小芽是研雀觉得你最近在变热的话题。
           下一步你可以确认 / 调整这些方向。
         </p>
       </FadeUp>
@@ -659,13 +659,13 @@ function StepConfirm({ payload, onBack, onDone }) {
         <p className="font-mono text-[11px] tracking-[0.25em] uppercase text-coral mb-4">step 05 · 确认你的方向</p>
         <h1 className="text-[32px] sm:text-[36px] font-medium leading-[1.25] tracking-wide m-0 mb-5 text-navy" style={{ fontFamily: '"Noto Serif SC", serif' }}>
           {isFresh
-            ? <>告诉 papermind 你<br/>最近在追<span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]"> 什么方向</span>。</>
-            : <>papermind 从你库里抽出了<br/>这些<span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]"> 研究方向</span>。</>}
+            ? <>告诉研雀你<br/>最近在追<span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]"> 什么方向</span>。</>
+            : <>研雀从你库里抽出了<br/>这些<span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]"> 研究方向</span>。</>}
         </h1>
         <p className="text-base leading-[1.85] text-navy/70 m-0">
           {isFresh
-            ? '一句话就够，可以随时修改。 papermind 会从这里开始为你找最新文献。'
-            : '勾选你想让 papermind 继续帮你追的，取消勾选的会被淡化（不会删除你的文献）。也可以补充几个 papermind 没看出来的。'}
+            ? '一句话就够，可以随时修改。 研雀会从这里开始为你找最新文献。'
+            : '勾选你想让研雀继续帮你追的，取消勾选的会被淡化（不会删除你的文献）。也可以补充几个研雀没看出来的。'}
         </p>
       </FadeUp>
 
@@ -713,7 +713,7 @@ function StepConfirm({ payload, onBack, onDone }) {
 
       {/* background + range */}
       <FadeUp delay={250} className="rounded-[22px] bg-warm-white/85 border border-navy/8 backdrop-blur-sm px-8 py-7 mb-4">
-        <ConfirmHeader title="其他想让 papermind 知道的" count="可选"/>
+        <ConfirmHeader title="其他想让研雀知道的" count="可选"/>
         <textarea
           value={background}
           onChange={e => setBackground(e.target.value)}
@@ -744,7 +744,7 @@ function StepConfirm({ payload, onBack, onDone }) {
         <div className="flex flex-col items-end gap-2">
           {error && <p className="text-sm text-coral m-0">{error}</p>}
           <PrimaryBtn onClick={handleSubmit} disabled={submitting || keptFocus.length === 0}>
-            {submitting ? '保存中…' : <>完成 · 进入 papermind <ArrowRight size={14}/></>}
+            {submitting ? '保存中…' : <>完成 · 进入研雀 <ArrowRight size={14}/></>}
           </PrimaryBtn>
         </div>
       </FadeUp>
@@ -815,7 +815,7 @@ function StepDone({ payload, onEnter }) {
       <FadeUp delay={0} className="max-w-[640px]">
         <p className="font-mono text-[11px] tracking-[0.25em] uppercase text-coral mb-4">第一颗芽长出来了</p>
         <h1 className="text-[36px] sm:text-[44px] font-medium leading-[1.25] tracking-wide m-0 mb-5 text-navy" style={{ fontFamily: '"Noto Serif SC", serif' }}>
-          欢迎来到 papermind。<br/>
+          欢迎来到研雀。<br/>
           你的<span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]"> 研究地形 </span>已经诞生。
         </h1>
         <p className="text-base leading-[1.85] text-navy/70 m-0 max-w-[560px] mx-auto">
@@ -829,7 +829,7 @@ function StepDone({ payload, onEnter }) {
 
       <FadeUp delay={400} className="mt-10 flex gap-3.5">
         <PrimaryBtn onClick={onEnter}>
-          进入 papermind <ArrowRight size={14}/>
+          进入研雀 <ArrowRight size={14}/>
         </PrimaryBtn>
         <GhostBtn onClick={onEnter}>先去看看推荐</GhostBtn>
       </FadeUp>

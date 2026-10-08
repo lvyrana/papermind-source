@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:pdf-reader": "node scripts/check-pdf-reader.mjs",
+    "test:accounts": "node scripts/check-accounts-browser.mjs",
     "test": "node --test \"src/**/*.test.js\""
   },
   "dependencies": {

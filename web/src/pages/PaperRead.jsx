@@ -1664,7 +1664,7 @@ function RailContent({
           }`}>
           {bookmarked
             ? <><Bookmark size={12} className="fill-current"/> 已收藏</>
-            : <><BookmarkPlus size={12}/> 收藏到 papermind</>}
+            : <><BookmarkPlus size={12}/> 收藏到研雀</>}
         </button>
 
         {paper.link && (
@@ -1899,7 +1899,7 @@ function MemoryChannel(props) {
                 ? `正在读取全文${selfTestPrepareProgress?.total
                   ? ` ${selfTestPrepareProgress.done}/${selfTestPrepareProgress.total}`
                   : '…'}`
-                : '让 papermind 考考你'}
+                : '让研雀考考你'}
             </p>
             <p className="text-[10.5px] text-warm-gray/70 mt-0.5 m-0">
               {selfTestPrepareError || `苏格拉底式追问 · 基于全文与 ${cards.length} 张卡片`}

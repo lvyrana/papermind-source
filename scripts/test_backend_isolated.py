@@ -23,7 +23,7 @@ def main():
             shutil.copy2(root / "zotero-plugin" / name, target / "zotero-plugin" / name)
         env = dict(os.environ)
         for key in ("QWEN_API_KEY", "GLM_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
-                    "SENTRY_DSN", "OWNER_UID"):
+                    "SENTRY_DSN", "OWNER_UID", "ZOTERO_OAUTH_CLIENT_KEY", "ZOTERO_OAUTH_CLIENT_SECRET", "PAPERMIND_PUBLIC_ORIGIN"):
             env[key] = ""
         # Source files and database initialization resolve within this temp copy.
         env.pop("PYTHONPATH", None)
