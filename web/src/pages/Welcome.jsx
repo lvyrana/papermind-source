@@ -16,7 +16,7 @@ export default function Welcome() {
               <Link to="/demo" className="lf-button">免费试读一篇 <ArrowRight size={17} /></Link>
               <Link to="/" className="lf-text-link">打开自己的论文 <ArrowUpRight size={16} /></Link>
             </div>
-            <p className="lf-quiet"><Check size={14} />样例免登录 <span>·</span> 无需上传论文 <span>·</span> 预设解读，可交互</p>
+            <p className="lf-quiet"><Check size={14} />免费样例 <span>·</span> 预设解读</p>
           </div>
           <div className="lf-hero-art" aria-label="原文、精读与阅读卡片示意">
             <div className="lf-art-orbit" />
@@ -67,9 +67,9 @@ export default function Welcome() {
         <section className="lf-section lf-container lf-faq" id="questions">
           <div><p className="lf-eyebrow">BEFORE THE FIRST PAGE</p><h2>开始前的几个问题。</h2></div>
           <div className="lf-faq-list">
-            <details><summary>需要先注册或配置 AI 吗？</summary><p>免费样例无需登录，使用预设解读。正式工作台的 AI 使用取决于站点配置；启用账号服务后，通过 Zotero 登录。也可在设置中使用自己的模型服务。</p></details>
-            <details><summary>论文和阅读记录如何处理？</summary><p>样例保存的卡片只留在当前浏览器，可随时清空。正式网页上传的 PDF 和阅读记录会保存到所连接的研雀服务；发起 AI 阅读时，相关论文内容会发送给配置的模型服务。</p></details>
-            <details><summary>网站和 Zotero 插件是什么关系？</summary><p>Zotero 是文献入口，网页提供完整精读工作台。新版登录可统一身份；插件本地记录目前不会自动同步到网站。插件安装与连接按当前发布版本的说明操作。</p></details>
+            <details><summary>需要先注册或配置 AI 吗？</summary><p>免费样例点开即可试读。使用 Zotero 账号登录后，可跨浏览器访问同一阅读空间；AI 服务在「设置」中管理。</p></details>
+            <details><summary>论文和阅读记录如何处理？</summary><p>试读卡片保存在当前浏览器。正式阅读的 PDF、笔记和对话保存在研雀服务器；AI 阅读会将相关内容发送至所选模型服务。</p></details>
+            <details><summary>网站和 Zotero 插件是什么关系？</summary><p>通过 Zotero 插件把文献送入研雀，在网页里精读、提问和整理卡片。</p></details>
             <details><summary>手机上可以做什么？</summary><p>手机可以完整走完这个试读样例，也可访问网页书架与阅读记录。多栏 PDF 精读、卡片整理和汇报制作，建议使用电脑。</p></details>
           </div>
         </section>

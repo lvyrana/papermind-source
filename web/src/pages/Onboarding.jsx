@@ -200,9 +200,7 @@ function StepSource({ onPickZotero, onPickFresh }) {
           <span className="text-coral underline decoration-coral/40 decoration-[1.5px] underline-offset-[6px]">带进来</span>。
         </h1>
         <p className="text-[15.5px] leading-[1.85] text-navy/70 max-w-[620px] m-0">
-          研雀不是又一个搜论文的工具，是一个会记得你的研究助手。
-          如果你已经有 Zotero 库，几秒钟内研雀就能从中读出你的研究地形 —
-          那是你过去几年阅读痕迹的样子。
+          从 Zotero 文献出发，整理研究方向和方法兴趣。
         </p>
       </FadeUp>
 
@@ -218,7 +216,7 @@ function StepSource({ onPickZotero, onPickFresh }) {
             </div>
             <div>
               <h3 className="m-0 text-xl font-medium tracking-wider" style={{ fontFamily: '"Noto Serif SC", serif' }}>我有 Zotero 库</h3>
-              <p className="m-0 mt-1 font-mono text-[12.5px] tracking-[0.18em] uppercase text-warm-gray">recommended · 30 秒生出地形图</p>
+              <p className="m-0 mt-1 font-mono text-[12.5px] tracking-[0.18em] uppercase text-warm-gray">ZOTERO LIBRARY</p>
             </div>
           </div>
           <p className="text-[14px] leading-[1.8] text-navy/70 m-0 mb-5">
@@ -252,9 +250,6 @@ function StepSource({ onPickZotero, onPickFresh }) {
         </div>
       </FadeUp>
 
-      <FadeUp delay={400} className="mt-10 text-center text-[12.5px] text-warm-gray">
-        研雀不会把你的文献库上传到第三方。所有解析都在本地或你自己的研雀实例完成。
-      </FadeUp>
     </Stage>
   )
 }
@@ -300,7 +295,6 @@ function StepImport({ onParse, onBack }) {
           在 Zotero 选中你的整个 library 或某个 collection，右键 →
           <em className="not-italic text-navy/85"> Export Library… </em>
           选择 <Code>Better BibTeX</Code> / <Code>RIS</Code> / <Code>CSL JSON</Code>，把文件拖到下面的方框。
-          研雀在你本地解析，不会上传到第三方。
         </p>
       </FadeUp>
 
@@ -372,7 +366,7 @@ function StepImport({ onParse, onBack }) {
           <p className="mt-5 text-[12.5px] text-warm-gray leading-relaxed">
             在 <a href="https://www.zotero.org/settings/keys" target="_blank" rel="noreferrer" className="text-coral hover:underline">
               zotero.org/settings/keys <ExternalLink size={10} className="inline ml-0.5"/>
-            </a> 创建一个只读 key。研雀只会读取你的 library 元数据，不会修改任何内容。也支持 group library。
+            </a> 创建只读 API Key，用于读取文献元数据。
           </p>
           <PrimaryBtn
             className="mt-5"
@@ -665,7 +659,7 @@ function StepConfirm({ payload, onBack, onDone }) {
         <p className="text-base leading-[1.85] text-navy/70 m-0">
           {isFresh
             ? '一句话就够，可以随时修改。 研雀会从这里开始为你找最新文献。'
-            : '勾选你想让研雀继续帮你追的，取消勾选的会被淡化（不会删除你的文献）。也可以补充几个研雀没看出来的。'}
+            : '勾选要持续关注的研究方向，也可以添加新方向。'}
         </p>
       </FadeUp>
 

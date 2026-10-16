@@ -726,9 +726,7 @@ const PdfViewer = forwardRef(function PdfViewer(
         title.textContent = `第 ${pageNum} 页没有成功显示`
         const detail = document.createElement('p')
         detail.className = 'text-xs text-warm-gray'
-        detail.textContent = err?.name
-          ? `可能是浏览器内存不足或 PDF 页面结构异常（${err.name}）。`
-          : '可能是浏览器内存不足或 PDF 页面结构异常。'
+        detail.textContent = `错误类型：${err?.name || 'PDFRenderError'}`
         const nativeLink = document.createElement('a')
         nativeLink.href = originalUrl || url
         nativeLink.target = '_blank'
@@ -1179,7 +1177,7 @@ const PdfViewer = forwardRef(function PdfViewer(
             <p className="text-sm text-navy mb-1">PDF 无法直接渲染</p>
             <p className="text-xs text-warm-gray mb-4 leading-relaxed">
               {/CORS|Failed to fetch|NetworkError/i.test(error)
-                ? '出版方阻止了跨域加载，请在新标签页查看原文。'
+                ? 'PDF 加载失败，可打开原文或上传本地文件。'
                 : error}
             </p>
             <div className="flex items-center justify-center gap-2 flex-wrap">

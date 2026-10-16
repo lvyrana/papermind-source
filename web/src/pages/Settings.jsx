@@ -105,6 +105,7 @@ const FEEDBACK_TYPES = [
 // 产品转向「精读工作台」后，画像改为行为自动生成的只读副产品，不再让用户主动填写。
 // 隐藏所有主动填写偏好入口（置 true 即恢复）。
 const SHOW_PREFERENCES = false
+const SHOW_BUILTIN_AI_STATUS = false
 
 // ═════════════════════════════════════════════════════════════
 // MAIN
@@ -188,7 +189,7 @@ export default function Settings() {
     catch { setUid(''); setUidUnavailable(true) }
   }, [])
   useEffect(() => {
-    apiGet('/usage').then(setUsage).catch(() => {})
+    if (SHOW_BUILTIN_AI_STATUS) apiGet('/usage').then(setUsage).catch(() => {})
     apiGet('/stats').then(setStats).catch(() => {})
   }, [])
 
@@ -250,7 +251,7 @@ export default function Settings() {
           <ArrowLeft size={16} /> <span>返回</span>
         </Link>
         <h1 className="pm-page-title text-[30px] lg:text-[34px] text-navy leading-tight">设置</h1>
-        <p className="text-sm text-warm-gray mt-1">管理 AI 服务、数据与隐私</p>
+        <p className="text-sm text-warm-gray mt-1">账号、数据与反馈</p>
       </header>
 
       <main className="px-6 max-w-2xl lg:max-w-[860px] mx-auto space-y-1.5">
@@ -271,6 +272,7 @@ export default function Settings() {
         )}
 
         {/* ─── AI 服务 ─── */}
+        {SHOW_BUILTIN_AI_STATUS && <>
         <SectionLabel>AI 服务</SectionLabel>
         <div className="bg-warm-white/[0.82] backdrop-blur-sm rounded-2xl p-5 border border-cream-dark/[0.7]">
           <div className="flex items-center gap-3 mb-5">
@@ -280,7 +282,7 @@ export default function Settings() {
                 <h2 className="text-navy font-semibold text-sm">AI 服务</h2>
                 <span className="text-[10px] bg-coral/10 text-coral px-2 py-0.5 rounded-full font-medium">测试版</span>
               </div>
-              <p className="text-xs text-warm-gray mt-0.5">由系统统一提供，无需配置</p>
+              <p className="text-xs text-warm-gray mt-0.5">研雀内置 AI 服务</p>
             </div>
             <div className="flex items-center gap-1.5 text-xs text-mint flex-shrink-0">
               <span className="w-1.5 h-1.5 rounded-full bg-mint inline-block" />{aiNeedsLogin ? '登录后使用' : '内置服务'}
@@ -314,6 +316,7 @@ export default function Settings() {
             </div>
           </div>
         </div>
+        </>}
 
         {/* ─── 自定义 AI 模型 ─── */}
         <CustomLLMCard />
@@ -347,7 +350,7 @@ export default function Settings() {
               <p className="text-xs text-warm-gray mt-0.5">
                 {uidUnavailable
                   ? '当前浏览器暂时无法读取设备 ID，建议刷新或切换常规浏览模式。'
-                  : '新设备默认使用独立的数据空间，只有通过下方链接访问才会同步这份数据。'}
+                  : '在另一台设备打开同步链接，即可访问当前阅读空间。'}
               </p>
             </div>
           </div>
@@ -421,7 +424,7 @@ export default function Settings() {
             onBlur={e => e.target.style.borderColor = 'rgba(237,228,216,0.8)'}/>
           <div className="flex items-center justify-between mt-3">
             <span className="text-xs" style={{ color: '#B8A798' }}>
-              {feedbackContent.length > 0 ? `${feedbackContent.length} 字` : '反馈会关联匿名设备编号，请勿填写个人敏感信息'}
+              {feedbackContent.length} / 1000 字
             </span>
             <button onClick={handleSendFeedback} disabled={feedbackSending || !feedbackContent.trim()}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium transition-all"
@@ -760,8 +763,8 @@ function CustomLLMCard() {
           <h2 className="text-navy font-semibold text-sm">自定义 AI 模型</h2>
           <p className="text-xs text-warm-gray mt-0.5">
             {active === 'custom'
-              ? <>当前使用：<span className="text-navy font-medium">{model || '自定义模型'}</span>，失败时自动回退内置通道</>
-              : '当前使用内置通道；配置后你的 API 将优先使用'}
+              ? <>当前使用：<span className="text-navy font-medium">{model || '自定义模型'}</span> · 备用：内置服务</>
+              : '填入 API 地址、密钥和模型即可启用'}
           </p>
         </div>
         {hasKey && (

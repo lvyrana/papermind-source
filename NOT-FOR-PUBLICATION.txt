@@ -1,2 +1,0 @@
-Private review only. A license file does not authorize publication.
-Review sensitive files, historical credential rotation and publication approval before release.

@@ -35,7 +35,7 @@ export default function Demo() {
     try {
       localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(next))
       setStorageUnavailable(false)
-      setNotice('已保存到本机样例卡片。可以继续试读，或下载带出处的 Markdown。')
+      setNotice('已保存到本机样例卡片。')
     } catch {
       setStorageUnavailable(true)
       setNotice('浏览器禁止本地存储，本次卡片仅在当前页面保留。可立即下载 Markdown。')
@@ -48,7 +48,7 @@ export default function Demo() {
       return
     }
     setSaved([])
-    setNotice('本机样例卡片已清空。正式书架和阅读记录不受影响。')
+    setNotice('本机样例卡片已清空。')
   }
 
   function downloadCards() {
@@ -64,7 +64,7 @@ export default function Demo() {
   return <PublicLayout title="免费试读一篇" demo>
     <main id="main-content" className="lf-container lf-demo-main">
       <div className="lf-demo-topline"><Link to="/welcome"><ArrowLeft size={14} />产品首页</Link><span><span className="lf-status-dot" />免费试读 · 预设解读</span></div>
-      <header className="lf-demo-title"><p className="lf-eyebrow">A SMALL READING, A REAL TAKEAWAY</p><h1>跟着三个问题，读深一篇。</h1><p>点开解读、核对原文，再留下一张阅读卡片。所有示例均已备好，无需登录。</p></header>
+      <header className="lf-demo-title"><p className="lf-eyebrow">A SMALL READING, A REAL TAKEAWAY</p><h1>跟着三个问题，读深一篇。</h1><p>点开解读、核对原文，再留下一张阅读卡片。</p></header>
       <nav className="lf-demo-steps" aria-label="试读问题">
         {demoPaper.sections.map(item => <button key={item.id} type="button" aria-pressed={item.id === section.id} onClick={() => selectSection(item.id)}>
           <span className="lf-step-index">{saved.includes(item.id) ? <Check size={16} /> : item.number}</span><span>{item.label}</span><span className="lf-demo-step-description">{item.kind}</span>
@@ -94,17 +94,17 @@ export default function Demo() {
             <div className="lf-prompt-box"><span className="lf-tiny-label">继续追问 · 预设问答</span><div>{section.prompts.map((item, index) => <button type="button" key={item.question} aria-expanded={prompt === index} onClick={() => setPrompt(prompt === index ? null : index)}>{item.question}<span>{prompt === index ? '−' : '+'}</span></button>)}</div>{prompt !== null && <p className="lf-prompt-answer" role="status">{section.prompts[prompt]?.answer}</p>}</div>
             <div className="lf-demo-card"><span className="lf-card-label"><Layers size={14} />{section.kind}<span>卡片预览</span></span><p>{section.takeaway}</p><button className="lf-anchor-link" type="button" onClick={returnToSource}><Quote size={12} />{section.source}<ArrowUpRight size={13} /></button></div>
             <button type="button" className="lf-button lf-save-button" onClick={saveCard}>{currentSaved ? <Check size={16} /> : <BookmarkPlus size={16} />}{currentSaved ? '已存入本机样例卡片' : '保存这张样例卡片'}</button>
-            <p className="lf-save-note">{storageUnavailable ? '本地存储不可用，建议下载卡片。' : '只保存在当前浏览器，可下载或清空。'}</p>
+            {storageUnavailable && <p className="lf-save-note">本地存储不可用，建议下载卡片。</p>}
           </div>
         </section>
       </div>
-      <p role="status" className="lf-demo-notice" aria-live="polite">{notice || '从任一问题开始；点击“回到原文核对”，看看理解与出处怎样连在一起。'}</p>
+      <p role="status" className="lf-demo-notice" aria-live="polite">{notice}</p>
 
       <section className="lf-demo-collection" aria-label="本机样例卡片">
         <div className="lf-collection-heading"><div><span className="lf-eyebrow">A TAKEAWAY TO KEEP</span><h2>本机样例卡片 <span>{saved.length} / 3</span></h2></div><div className="lf-collection-actions"><button type="button" disabled={saved.length === 0} className="lf-text-link" onClick={clearCards}><RotateCcw size={14} />清空样例</button><button type="button" disabled={saved.length === 0} className="lf-button lf-button-outline lf-button-small" onClick={downloadCards}><Download size={15} />下载 Markdown</button></div></div>
         {saved.length > 0 ? <div className="lf-saved-cards">{demoPaper.sections.filter(item => saved.includes(item.id)).map(item => <button key={item.id} type="button" onClick={() => { selectSection(item.id); window.scrollTo({ top: 0, behavior: 'instant' }) }}><span><Check size={13} />{item.kind}</span><p>{item.takeaway}</p><small>{item.source}<ArrowUpRight size={13} /></small></button>)}</div> : <p className="lf-collection-empty">保存上方卡片后，可以在这里回看并带走原文出处。</p>}
       </section>
-      <section className="lf-demo-next"><div><p className="lf-eyebrow">THE NEXT PAPER IS YOURS</p><h2>{saved.length === 3 ? '三张卡片，一次完整的试读。' : '换成一篇真正想读的论文。'}</h2><p>进入工作台上传 PDF，或连接 Zotero 开始精读。正式 AI 阅读按站点配置使用。</p></div><div><Link to="/" className="lf-button">打开自己的论文 <ArrowRight size={16} /></Link><Link to="/login" className="lf-text-link">连接 Zotero 账号 <ArrowUpRight size={15} /></Link></div></section>
+      <section className="lf-demo-next"><div><p className="lf-eyebrow">THE NEXT PAPER IS YOURS</p><h2>{saved.length === 3 ? '三张卡片，一次完整的试读。' : '换成一篇真正想读的论文。'}</h2><p>进入工作台上传 PDF，或连接 Zotero 开始精读。</p></div><div><Link to="/" className="lf-button">打开自己的论文 <ArrowRight size={16} /></Link><Link to="/login" className="lf-text-link">连接 Zotero 账号 <ArrowUpRight size={15} /></Link></div></section>
     </main>
   </PublicLayout>
 }

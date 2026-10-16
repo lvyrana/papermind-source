@@ -214,7 +214,7 @@ export default function Home() {
         if (data.enriching) startEnrichPoll()
       }
     } catch {
-      setError('无法连接后端服务。请确认后端已启动。')
+      setError('连接失败，请稍后重试。')
       const cached = localStorage.getItem('cached-papers')
       if (cached) setPapers(JSON.parse(cached))
       setLoading(false)
@@ -499,7 +499,7 @@ export default function Home() {
           {/* error / needs profile */}
           {needsProfile && (
             <div className="bg-coral/5 border border-coral/20 rounded-xl p-4 mb-5">
-              <p className="text-sm text-navy/70 mb-2">推荐需要一点研究偏好；精读工作台可以直接使用。</p>
+              <p className="text-sm text-navy/70 mb-2">填写研究偏好，获取相关论文推荐。</p>
               <Link to="/profile" className="inline-flex items-center gap-1 text-coral text-sm font-medium hover:underline">
                 去补充偏好 <ArrowRight size={13}/>
               </Link>
@@ -881,7 +881,7 @@ function DeepReadEntry({
           </p>
           <div className="mt-5 flex flex-wrap gap-2 text-[11px] text-warm-gray">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cream/70">
-              <FileText size={12}/> 不需要先填画像
+              <FileText size={12}/> PMID / DOI 检索
             </span>
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cream/70">
               <Upload size={12}/> 本地 PDF 可直接进
@@ -990,7 +990,7 @@ function MobileHome({
         </p>
         <h1 className="font-serif text-[32px] font-medium text-navy leading-tight m-0">{greeting}</h1>
         <p className="mt-4 text-[14px] leading-[1.85] text-navy/70 m-0">
-          {memoryHighlight || (profileFilled ? '可以直接开一篇精读，也可以继续看推荐。' : '不用先填画像。先把手头这篇读起来，推荐偏好以后再补。')}
+          {memoryHighlight || (profileFilled ? '打开论文精读，或查看最新推荐。' : '上传 PDF，或粘贴 PMID / DOI 开始精读。')}
         </p>
 
         <div className="mt-5 grid grid-cols-3 gap-2">
@@ -1065,7 +1065,7 @@ function MobileHome({
 
         {needsProfile && (
           <div className="bg-coral/5 border border-coral/20 rounded-xl p-4 mb-4">
-            <p className="text-sm text-navy/70 mb-2">推荐需要一点研究偏好；精读工作台可以直接使用。</p>
+            <p className="text-sm text-navy/70 mb-2">填写研究偏好，获取相关论文推荐。</p>
             <Link to="/profile" className="inline-flex items-center gap-1 text-coral text-sm font-medium">
               去补充偏好 <ArrowRight size={13}/>
             </Link>

@@ -28,7 +28,7 @@ const browser = await chromium.launch({ headless: true, chromiumSandbox: true,
   ...(process.env.PAPERMIND_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PAPERMIND_CHROMIUM_EXECUTABLE } : {}) })
 try {
   const context = await browser.newContext({ viewport: { width: 1100, height: 820 } })
-  const page = await context.newPage(), errors = [], starts = []
+  const page = await context.newPage(), errors = [], starts = [], usageRequests = []
   page.on('pageerror', e => errors.push(e.message))
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
   const uid = '11111111-1111-4111-8111-111111111111'
@@ -52,13 +52,21 @@ try {
       case '/api/profile': data = { background: '临床护理', focus_areas: '康复' }; break
       case '/api/settings': data = { can_manage: false }; break
       case '/api/library': data = { papers: [] }; break
-      case '/api/usage': data = { chat: { used: 0, limit: 60 }, translate: { used: 0, limit: 120 }, recommend: { used: 0, limit: 5 } }; break
+      case '/api/usage': usageRequests.push(url.pathname); data = { chat: { used: 0, limit: 60 }, translate: { used: 0, limit: 120 }, recommend: { used: 0, limit: 5 } }; break
       case '/api/stats': data = { papers: 0, notes: 0, chats: 0 }; break
     }
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify(data), headers: { 'Cache-Control': 'no-store' } })
   })
   await page.goto(base + '/settings')
   await page.getByRole('heading', { name: '研雀账号', exact: true }).waitFor()
+  const checkHiddenAIStatus = async () => {
+    assert.equal(await page.getByText('AI 服务', { exact: true }).count(), 0)
+    assert.equal(await page.getByText(/支持论文解读、翻译和对话|每人每天最多/).count(), 0)
+    assert.equal(await page.getByRole('heading', { name: '数据导出', exact: true }).isVisible(), true)
+  }
+  await checkHiddenAIStatus()
+  assert.equal(await page.getByText(/关联后旧专属链接不再|只验证身份，不申请/).count(), 0)
+  assert.equal(await page.getByRole('checkbox', { name: /首次创建账号时/ }).isChecked(), true)
   assert.equal(await page.title(), '研雀 · LitFinch')
   const brandLink = page.getByRole('link', { name: '研雀 · LitFinch 首页', exact: true })
   await brandLink.locator('img').evaluate(image => image.decode())
@@ -83,14 +91,22 @@ try {
   })
   await page.waitForURL(base + '/settings?auth=success')
   await page.getByText('已登录：测试阅读者', { exact: true }).waitFor()
+  await checkHiddenAIStatus()
   assert.equal(starts[0].adopt_legacy, true)
   assert.equal(await page.evaluate(() => localStorage.getItem('paper-notes-77')), '未保存的原始草稿')
   await page.screenshot({ path: path.join(screenshotDir, 'litfinch-account-settings.png'), fullPage: false })
+  for (const result of ['legacy-preserved', 'cancelled']) {
+    await page.goto(base + '/settings?auth=' + result)
+    await page.getByText('已登录：测试阅读者', { exact: true }).waitFor()
+    assert.equal(await page.getByText(/另一份旧设备记录|原专属链接仍用于|登录未完成，请重试/).count(), 0)
+  }
   await page.getByRole('button', { name: '退出账号', exact: true }).click()
   await page.waitForURL(base + '/settings')
   await page.getByRole('button', { name: '使用 Zotero 账号继续', exact: true }).waitFor()
   assert.equal(await page.evaluate(() => localStorage.getItem('paper-notes-77')), null)
   assert.notEqual(await page.evaluate(() => localStorage.getItem('papermind-uid')), uid)
+  await page.goto(base + '/settings?auth=cancelled')
+  await page.getByText('登录未完成，请重试。', { exact: true }).waitFor()
   await page.getByRole('button', { name: '使用 Zotero 账号继续', exact: true }).click()
   await page.waitForURL(base + '/settings?auth=success')
   await page.getByText('已登录：测试阅读者', { exact: true }).waitFor()
@@ -108,6 +124,7 @@ try {
   await page.reload()
   assert.equal(await page.getByRole('button', { name: '使用 Zotero 账号继续', exact: true }).isDisabled(), true)
   assert.deepEqual(errors, [])
+  assert.deepEqual(usageRequests, [])
   console.log('Browser account checks passed: login, explicit legacy association, logout/cache isolation, return login, plugin confirmation, unconfigured service. No external calls.')
 } finally {
   await browser.close()

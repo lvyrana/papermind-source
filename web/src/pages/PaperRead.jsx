@@ -627,7 +627,7 @@ export default function PaperRead() {
       }
     } catch (e) {
       setBoardError(e?.name === 'AbortError'
-        ? '投递超时，可能是网络不稳定。请重试。'
+        ? '投递超时，请重试。'
         : '投递失败，请检查网络后重试。')
     }
     finally { setBoardSending(false) }
@@ -1575,7 +1575,7 @@ export default function PaperRead() {
       />
 
       {/* ─── tour ─── */}
-      {paperTourStep === 1 && <TourBubble targetRef={bookmarkBtnRef} text="点击收藏，笔记和对话都会永久保存" step={1} total={3} placement="bottom" onNext={advancePaperTour}/>}
+      {paperTourStep === 1 && <TourBubble targetRef={bookmarkBtnRef} text="收藏论文，将笔记和对话保存到书架" step={1} total={3} placement="bottom" onNext={advancePaperTour}/>}
       {paperTourStep === 2 && externalLinkRef.current && <TourBubble targetRef={externalLinkRef} text="跳转到 PubMed 查看原文" step={2} total={3} placement="bottom" onNext={advancePaperTour}/>}
       {paperTourStep === 3 && <TourBubble targetRef={chatFootRef} text="划选 PDF 里的句子 → 这里会带着引用追问；对话会自动归档" step={3} total={3} placement="top" onNext={advancePaperTour}/>}
     </div>
@@ -1829,7 +1829,7 @@ function MemoryChannel(props) {
       {/* ── 未收藏提示（轻量，一行）── */}
       {!bookmarked && (
         <div className="shrink-0 px-4 py-2 border-b border-cream-dark/50 bg-navy/[0.02] flex items-center justify-between gap-2">
-          <p className="text-[11px] text-warm-gray m-0">收藏后笔记和对话永久保存</p>
+          <p className="text-[11px] text-warm-gray m-0">收藏后将笔记和对话保存到书架</p>
           <button onClick={onToggleBookmark} className="text-[11px] text-coral font-medium hover:underline shrink-0">收藏</button>
         </div>
       )}
@@ -1864,7 +1864,7 @@ function MemoryChannel(props) {
             className="mt-2 w-full bg-warm-white rounded-lg px-3 py-2 text-[13px] text-navy border border-navy/10 outline-none resize-none focus:border-coral/40 focus:ring-2 focus:ring-coral/10 leading-relaxed min-h-[100px]"/>
           {notes && (
             <p className="text-[10.5px] text-warm-gray/60 mt-1 italic">
-              {bookmarked ? '已自动保存到收藏' : '已保存到本地；收藏后永久'}
+              {bookmarked ? '已自动保存到书架' : '草稿已存于当前浏览器'}
             </p>
           )}
         </div>
