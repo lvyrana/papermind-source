@@ -390,6 +390,7 @@ export default function Home() {
 
         {/* ─── W2 header：问候 · 一行「papermind 还记得」 ─── */}
         <header className="mb-7 sm:mb-9">
+          <Link to="/welcome" className="float-right text-xs text-navy/70 hover:text-coral py-2">了解研雀 · 免费试读 →</Link>
           <h1 className="pm-page-title text-[36px] sm:text-[40px] text-navy leading-[1.15] m-0">{greeting}</h1>
           {memoryRecent && (
             <div className="mt-4 sm:mt-5 max-w-[660px] flex flex-col sm:flex-row items-start gap-1 sm:gap-2.5 text-[13px] leading-[1.75]">

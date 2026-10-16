@@ -76,6 +76,12 @@ PDF.js 同时声明可选 Node 依赖 `@napi-rs/canvas`（当前锁定 1.0.9，M
 
 ## 文献内容与 Zotero Connector
 
+### 免费试读论文
+
+`web/src/data/demoPaper.js` 和产品首页中的原文节选来自：Jeganathan V, Knight S, Bricknell M, Ridgers A, Wong R, Brazzale DJ, Ruehland WR, Rahman MA, Leong TL, McDonald CF (2022). *Impact of smoking status and chronic obstructive pulmonary disease on pulmonary complications post lung cancer surgery*. PLOS ONE 17(3): e0266052. [原论文与版权声明](https://doi.org/10.1371/journal.pone.0266052)。© 2022 Jeganathan et al.，采用 [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)。
+
+本项目仅摘录 Methods、Results、Discussion 中的指定句子并重新排版；中文译文、解读、问题及卡片为本项目整理的示例，页面与下载内容均标识改编并保留作者、来源和许可证链接。未复制原始病例数据库、出版方商标或整篇 PDF；原文的 CC BY 4.0 权利不因主项目代码采用 AGPL 而改变。
+
 用户上传的论文、截图和导出内容仍受其原有权利与保密约束。能阅读或查到开放获取地址，不自动意味着可以随源码包再分发。
 
 `zotero-plugin/` 保留该目录的 AGPL-3.0-only `LICENSE`；独立发布源为 [papermind-zotero](https://github.com/lvyrana/papermind-zotero)。主项目的许可由作者于 2026-09-28 单独确认，本次不更改 Connector 的既有许可或发布包。

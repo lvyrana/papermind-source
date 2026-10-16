@@ -1,80 +1,22 @@
-import { useEffect } from 'react'
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
-import Home from './pages/Home'
-import Onboarding from './pages/Onboarding'
-import Profile from './pages/Profile'
-import PaperRead from './pages/PaperRead'
-import Settings from './pages/Settings'
-import Library from './pages/Library'
-import LibraryDetail from './pages/LibraryDetail'
-import { setUserId, consumeUidSwitchFlag } from './api'
-import AccountGate from './components/AccountGate'
-import { useAccount } from './accountContext'
-import { switchAccountCache } from './auth'
+import { lazy, Suspense } from 'react'
+import { Routes, Route } from 'react-router-dom'
+import Welcome from './pages/Welcome'
+import Demo from './pages/Demo'
 
-const CACHE_KEY_PREFIXES = ['paper-notes-', 'paper-chat-', 'paper-bookmark-']
-const CACHE_KEY_EXACT = [
-  'cached-papers',
-  'cached-papers-time',
-  'cached-search-debug',
-  'cached-total',
-  'cached-remaining',
-  'cached-all-explored',
-  'cached-can-go-back',
-  'last-reading',
-]
+// Public pages work without an account or backend; workspace imports stay
+// lazy so visiting a sample does not initialize the existing device identity.
+const WorkspaceRoutes = lazy(() => import('./WorkspaceRoutes'))
+const Login = lazy(() => import('./pages/Login'))
 
-function clearLocalAccountCache() {
-  try {
-    CACHE_KEY_EXACT.forEach(key => localStorage.removeItem(key))
-    const toRemove = []
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      if (key && CACHE_KEY_PREFIXES.some(prefix => key.startsWith(prefix))) toRemove.push(key)
-    }
-    toRemove.forEach(key => localStorage.removeItem(key))
-  } catch {
-    // localStorage may be unavailable in privacy-restricted browsers.
-  }
-}
-
-function UidHandler() {
-  const account = useAccount()
-  const navigate = useNavigate()
-  const location = useLocation()
-  useEffect(() => {
-    if (account?.authenticated) return
-    const params = new URLSearchParams(location.search)
-    const uid = params.get('uid')
-    if (!uid || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uid)) return
-    // AccountGate archives/restores caches before child pages mount. Keep the
-    // old clearing implementation available, but do not erase restored drafts.
-    const USE_LEGACY_CACHE_CLEAR = false
-    if (consumeUidSwitchFlag() && USE_LEGACY_CACHE_CLEAR) clearLocalAccountCache()
-    setUserId(uid)
-    switchAccountCache(`guest:${uid}`)
-    params.delete('uid')
-    const search = params.toString()
-    navigate(`${location.pathname}${search ? `?${search}` : ''}${location.hash}`, { replace: true })
-  }, [location.search, location.pathname, location.hash, navigate, account?.authenticated])
-  return null
-}
-
-function App() {
+export default function App() {
   return (
-    <AccountGate><div className="min-h-screen bg-cream bg-flowing">
-      <UidHandler />
+    <Suspense fallback={<main className="p-8 text-navy" role="status">正在打开研雀…</main>}>
       <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/onboarding" element={<Onboarding />} />
-        <Route path="/profile" element={<Profile />} />
-        <Route path="/paper/:id" element={<PaperRead />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="/library" element={<Library />} />
-        <Route path="/library/:id" element={<LibraryDetail />} />
+        <Route path="/welcome" element={<Welcome />} />
+        <Route path="/demo" element={<Demo />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/*" element={<WorkspaceRoutes />} />
       </Routes>
-    </div></AccountGate>
+    </Suspense>
   )
 }
-
-export default App

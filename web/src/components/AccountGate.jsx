@@ -18,7 +18,10 @@ export default function AccountGate({ children }) {
       }
       switchAccountCache(identity, localStorage, data.authenticated && data.account.data_uid === getUserId())
       setState(data)
-    }).catch(e => { if (alive) setError(e.message) })
+    }).catch(e => {
+      if (alive) setError(e instanceof SyntaxError || e instanceof TypeError
+        ? '暂时无法连接账号服务，请稍后重试。' : e.message)
+    })
     const changed = event => { if (event.key === 'pm-cache-owner') window.location.reload() }
     window.addEventListener('storage', changed)
     return () => { alive = false; window.removeEventListener('storage', changed) }

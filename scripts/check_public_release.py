@@ -17,6 +17,8 @@ SECRET_PATTERNS = (
 )
 PRIVATE_PARTS = {"data", "backups", "软著申请", "conference-2026", ".git",
                  "node_modules", ".venv", ".venv_new", ".venv_mcp", "papermind-zotero"}
+# Exact static source exception only; secret and symlink checks still apply.
+PUBLIC_SOURCE_PATH_EXCEPTIONS = frozenset({"web/src/data/demoPaper.js"})
 BINARY_REVIEW_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".pdf", ".docx", ".xlsx", ".xpi", ".zip"}
 
 
@@ -24,7 +26,7 @@ def private_path(path):
     p = PurePosixPath(path)
     name = p.name.lower()
     return (
-        any(part in PRIVATE_PARTS for part in p.parts)
+        (path not in PUBLIC_SOURCE_PATH_EXCEPTIONS and any(part in PRIVATE_PARTS for part in p.parts))
         or (name.startswith(".env") and name != ".env.example")
         or name.endswith((".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".pem", ".key"))
     )

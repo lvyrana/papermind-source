@@ -90,6 +90,78 @@ class PublicReleaseTests(unittest.TestCase):
         self.assertFalse(private_path("web/.env.example"))
         self.assertFalse(private_path("papermind/src/config_store.py"))
 
+    def test_demo_source_is_the_only_data_path_exception(self):
+        self.assertFalse(private_path("web/src/data/demoPaper.js"))
+        self.assertEqual(inspect_file("web/src/data/demoPaper.js", b"export const demo = {};\n"), [])
+        for name in ("web/src/data/other.js", "web/src/data/demopaper.js",
+                     "web/src/data/demoPaper.js.bak", "web/src/data/demoPaper.js.db",
+                     "other/web/src/data/demoPaper.js", "backups/web/src/data/demoPaper.js",
+                     "./web/src/data/demoPaper.js", "web/src/data/../data/demoPaper.js"):
+            with self.subTest(path=name):
+                self.assertTrue(private_path(name))
+
+    def test_business_data_remains_blocked_in_every_data_directory(self):
+        for name in ("data/demoPaper.js", "papermind/data/demoPaper.js", "web/data/demoPaper.js",
+                     "papermind/data/users.json", "papermind/data/papers.csv",
+                     "web/src/data/users.json", "web/src/data/notes.txt", "data/auth.sqlite3"):
+            with self.subTest(path=name):
+                self.assertEqual(inspect_file(name, b"synthetic business-data fixture\n"),
+                                 [("private-path", 0)])
+
+    def test_demo_source_still_checks_every_secret_pattern(self):
+        fixtures = (
+            ("private-key", "-----BEGIN " + "PRIVATE KEY-----"),
+            ("provider-key", "sk-" + "A" * 32),
+            ("github-token", "ghp_" + "B" * 32),
+            ("aws-key-id", "AKIA" + "C" * 16),
+        )
+        for rule, token in fixtures:
+            with self.subTest(rule=rule):
+                issues = inspect_file("web/src/data/demoPaper.js", ("// fixture\n" + token).encode())
+                self.assertEqual(issues, [(rule, 2)])
+                self.assertNotIn(token, str(issues))
+
+    def test_git_check_and_source_export_include_only_the_demo_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "LICENSE").write_text("Synthetic test license.\n")
+            demo_name = "web/src/data/demoPaper.js"
+            demo_bytes = b"export const demo = {};\n"
+            demo = root / demo_name
+            demo.parent.mkdir(parents=True)
+            demo.write_bytes(demo_bytes)
+            paths, findings, _ = check(root)
+            self.assertIn(demo_name, paths)
+            self.assertEqual(findings, [])
+            business_paths = ("web/src/data/users.json", "papermind/data/papers.csv", "data/auth.sqlite3")
+            for name in business_paths:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"synthetic business-data fixture\n")
+            _, findings, _ = check(root)
+            self.assertEqual(findings, [(name, "private-path", 0) for name in sorted(business_paths)])
+            target = Path(directory) / "source"
+            prepare(root, target)
+            self.assertEqual((target / demo_name).read_bytes(), demo_bytes)
+            self.assertFalse(any((target / name).exists() for name in business_paths))
+            manifest = json.loads((target / "SOURCE-MANIFEST.json").read_text())
+            self.assertEqual(manifest["sha256"][demo_name], hashlib.sha256(demo_bytes).hexdigest())
+            self.assertTrue(all(name not in manifest["sha256"] for name in business_paths))
+
+    def test_demo_source_exception_does_not_allow_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            demo = root / "web/src/data/demoPaper.js"
+            demo.parent.mkdir(parents=True)
+            demo.symlink_to("/path/that/must/not/be/read")
+            _, findings, _ = check(root, require_license=False)
+            self.assertEqual(findings, [("web/src/data/demoPaper.js", "symlink-needs-review", 0)])
+            with self.assertRaisesRegex(ValueError, "Refusing non-regular source member"):
+                prepare(root, Path(directory) / "source", draft=True)
+
     def test_patterns_report_positions_never_values(self):
         token = "sk-" + "A" * 32
         issues = inspect_file("example.py", ("# comment\n" + token).encode())

@@ -43,3 +43,7 @@ jobs:
         working-directory: web
         env:
           PAPERMIND_CHROMIUM_EXECUTABLE: /opt/google/chrome/chrome
+      - run: npm run test:public-entry
+        working-directory: web
+        env:
+          PAPERMIND_CHROMIUM_EXECUTABLE: /opt/google/chrome/chrome
