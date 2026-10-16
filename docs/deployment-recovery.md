@@ -1,6 +1,6 @@
 # PaperMind 部署、试用准入与恢复
 
-更新：2026-10-16。最新版已完成候选和服务器准备，正式服务尚未切换。唯一开源进度入口为 [open-source-readiness.md](open-source-readiness.md)。
+更新：2026-10-16。作者已确认统一配色并授权正式上线，先删去指定 FAQ 文案，再按当前源码重新生成升级包。下面的准备记录保留为升级前证据，切换结果另记。唯一开源进度入口为 [open-source-readiness.md](open-source-readiness.md)。
 
 ## 2026-10-16 现网升级准备
 

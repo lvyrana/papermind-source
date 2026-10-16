@@ -65,7 +65,7 @@ export default function Welcome() {
         </section>
 
         <section className="lf-section lf-container lf-faq" id="questions">
-          <div><p className="lf-eyebrow">BEFORE THE FIRST PAGE</p><h2>开始前的几个问题。</h2><p>适合电脑精读，也方便在手机上先试一篇。</p></div>
+          <div><p className="lf-eyebrow">BEFORE THE FIRST PAGE</p><h2>开始前的几个问题。</h2></div>
           <div className="lf-faq-list">
             <details><summary>需要先注册或配置 AI 吗？</summary><p>免费样例无需登录，使用预设解读。正式工作台的 AI 使用取决于站点配置；启用账号服务后，通过 Zotero 登录。也可在设置中使用自己的模型服务。</p></details>
             <details><summary>论文和阅读记录如何处理？</summary><p>样例保存的卡片只留在当前浏览器，可随时清空。正式网页上传的 PDF 和阅读记录会保存到所连接的研雀服务；发起 AI 阅读时，相关论文内容会发送给配置的模型服务。</p></details>

@@ -25,6 +25,14 @@ const server = createServer(async (req, res) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const base = `http://127.0.0.1:${server.address().port}`
 let browser
+async function assertWorkspacePalette(page) {
+  const palette = await page.locator('.lf-public').evaluate(element => {
+    const style = getComputedStyle(element)
+    return { color: style.color, background: style.backgroundColor }
+  })
+  assert.deepEqual(palette, { color: 'rgb(30, 58, 95)', background: 'rgb(247, 240, 232)' },
+    'Public pages must render the existing navy/cream workspace palette')
+}
 try {
   browser = await chromium.launch({ headless: true, chromiumSandbox: true,
     ...(process.env.PAPERMIND_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PAPERMIND_CHROMIUM_EXECUTABLE } : {}) })
@@ -44,6 +52,7 @@ try {
 
   await page.goto(base + '/welcome')
   await page.getByRole('heading', { name: /把一篇论文/ }).waitFor()
+  await assertWorkspacePalette(page)
   assert.equal(await page.evaluate(() => localStorage.getItem('papermind-uid')), null)
   assert.deepEqual(apiRequests, [])
   for (const width of [360, 390, 768, 1440]) {
@@ -58,6 +67,7 @@ try {
   }
   await page.getByRole('link', { name: '免费试读一篇', exact: true }).click()
   await page.getByRole('heading', { name: '跟着三个问题，读深一篇。' }).waitFor()
+  await assertWorkspacePalette(page)
   await page.evaluate(() => localStorage.setItem('paper-notes-existing', 'preserve this draft'))
   for (const name of ['看清设计', '读准数字', '追问边界']) {
     await page.getByRole('button', { name: new RegExp(name) }).click()
@@ -124,6 +134,7 @@ try {
   allowAccount = true
   await login.goto(base + '/login')
   await login.getByRole('heading', { name: '研雀账号', exact: true }).waitFor()
+  await assertWorkspacePalette(login)
   assert.equal(await login.getByRole('button', { name: '使用 Zotero 账号继续' }).isDisabled(), true)
   await login.screenshot({ path: path.join(output, 'login-1440.png'), fullPage: true })
   failAccount = true
