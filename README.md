@@ -4,12 +4,27 @@
 
 [在线体验](https://papermindapp.com/welcome) · [免费试读](https://papermindapp.com/demo) · [Zotero 插件源码](https://github.com/lvyrana/papermind-zotero) · [问题反馈](https://github.com/lvyrana/papermind-source/issues)
 
+
+## 看看研雀怎么用
+
+从免费试读开始，先看清原文、核对解读，再留下一张带出处的卡片。
+
+![研雀首页：从一篇论文开始精读](docs/screenshots/litfinch-welcome-20261022.png)
+
+免费试读把原文与解读并排展示。点击「回到原文核对」定位证据，样例卡片可保存并导出为 Markdown。
+
+![免费试读：原文定位、数字解释与样例卡片](docs/screenshots/litfinch-demo-20261022.png)
+
+截图来自 2026-10-22 的实际前端构建。试读内容为开放论文节选与预设解读；来源和许可见[截图说明](docs/screenshots/README.md)。正式工作台支持打开自己的 PDF。
+
 ## 两个入口
 
 - **网页版（本仓库）**：React 前端、Python/FastAPI 后端、SQLite 存储，以及部署、测试、备份脚本。支持直接上传 PDF、论文检索和精读。
-- **Zotero 客户端（独立仓库）**：在 Zotero 内阅读、追问和整理卡片，也可将论文送入网页版。当前公开安装包为 0.3.0；0.7.0 原生阅读台源码以候选状态提供。
+- **Zotero 客户端（独立仓库）**：在 Zotero 内阅读、追问和整理卡片，也可将论文送入网页版。[0.7.0 预发布包](https://github.com/lvyrana/papermind-zotero/releases/tag/preview-0.7.0)供小范围手动安装；自动更新保持正式版 0.3.0。
 
 2026-10-16 源码包含已上线的产品首页、免费试读、Zotero 身份登录、统一配色和设置页精简。网站与插件沿用原 PaperMind 技术标识，显示名称为「研雀 · LitFinch」。插件本地阅读记录与网页记录分别保存。
+
+2026-10-22，插件 0.7.0 已在 macOS / Zotero 9.0.6 完成真实登录、重启恢复和退出验收。Windows、Linux 与其他 Zotero 版本尚未原生验收。
 
 ## 核心功能
 
