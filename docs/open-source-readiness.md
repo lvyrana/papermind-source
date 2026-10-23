@@ -1,6 +1,26 @@
 # 研雀 · LitFinch 开源准备与自部署说明
 
-更新：2026-10-16。本仓库为研雀本体公开源码，包含前端、后端和部署工具；已同步正式前端 `813b950` 对应功能。Zotero 客户端在独立仓库维护，0.7.0 源码为候选，正式安装包保持 0.3.0。下方按日期保留准备与历史验收；早期“私有”“未上线”描述属于当时状态。当前部署见 [部署验收](deployment-recovery.md)。
+更新：2026-10-23。当前公开源码同步 Vercel/Turso/私有 Blob 迁移及 Vite 8.3.5；部署说明见 [云端部署与维护](vercel-deployment.md)。Connector 0.7.1 提供稳定手动安装包，旧主站自动更新清单仍为 0.3.0。原开发历史、用户数据、凭据和私有迁移回执不进入公开仓库。下面保留按日期发生的历史验收，不代表当前发布状态。
+
+## 2026-10-22：Connector 预发布与图文 README 已公开
+
+原生 0.7.0 已完成真实登录、实际 Zotero 进程重启后的账号恢复和插件退出；网页会话不受影响，本机既有阅读文件哈希未变。新包仅增加第三方声明，原有 10 个文件与实机包逐字节一致。插件 72 项、源码导出 19 项测试通过；前端 68 项、构建、公共入口和插件阅读台浏览器回归通过。
+
+主站 README 增加首页和试读两张当前构建截图；插件 README 增加合成内容的真实阅读台组件截图。每张均人工查看，来源明确，按完整路径导出。作者确认后同步公开提交 `papermind-source@fbdb585` 与 `papermind-zotero@1bf7aed`，三张公开图片内容哈希与本地一致，GitHub 渲染结果均包含图片。
+
+许可检查已按实际 XPI 收敛：网站安装环境中的 5 个许可全文缺项不属于插件包，不能继续列为 Connector 阻塞。当前 XPI 不带第三方运行库、平台二进制或字体，附完整 AGPL 与独立第三方声明。[preview-0.7.0](https://github.com/lvyrana/papermind-zotero/releases/tag/preview-0.7.0) 已发布并核对实际下载哈希；正式 latest 和自动更新保持 0.3.0。Windows/Linux 与其他 Zotero 版本尚未原生验收。
+
+插件 CI 成功；主项目 CI 在已通过后端、前端、构建与 lint 后，由 Vite 高危依赖告警阻断。本机审计复现，待单独升级验证；本次没有部署网站或改依赖。两份公开历史扫描通过，原开发仓仍私有。详细证据与下一步见 [0.7.0 发布记录](connector-0.7.0-release.md)。
+
+## 2026-10-16：两份源码公开完成
+
+- 主项目：[papermind-source](https://github.com/lvyrana/papermind-source)，提交 `43fe3c8d8ce39fc01ff5c74b0442124b3848f80a`。从开发基线 `c767bc9` 导出 144 个源码文件，公开版 README、CHANGELOG 和本说明顶部按发布用途整理；另附逐文件哈希与执行位清单。React 前端、FastAPI 后端、测试、备份和部署脚本均包含。
+- 插件：[papermind-zotero](https://github.com/lvyrana/papermind-zotero)，提交 `edc3460838041e6216b54b8ab9ccbb8c8897948d`。31 个源码文件，0.7.0 原生阅读台以候选状态公开；沿用旧插件身份。正式 Release 与主站更新包保持 0.3.0，本轮未创建 tag、发布新 XPI 或部署网站。
+- [主项目 CI](https://github.com/lvyrana/papermind-source/actions/runs/38898085573)和[插件 CI](https://github.com/lvyrana/papermind-zotero/actions/runs/38897936351)均成功。隔离副本验证后端 108 项与 HTTP，前端 68 项、build、lint、npm 审计 0 条漏洞及 PDF/账号/公共入口浏览器流程；插件 69 项、XPI 完整性和阅读台/侧栏两组模拟浏览器流程。浏览器保留沙箱。
+- 当前文件及可达历史扫描通过：本体 250 个 Git blob、插件 69 个，无超过大小限制的跳过项。`hero.png` 已人工查看；旧 XPI 与既有公开 v0.3.0 SHA-256 一致。检测命中的测试占位值、检测用例、环境变量引用和首选项键名经逐项检查均非凭据。
+- npm 首次安装受默认缓存目录写入权限影响，改用临时独立缓存成功；没有修改全局缓存权限、Python 环境或活动项目依赖。GitHub 提示现有 action 的旧 Node 运行时已被平台切到 Node 24，任务成功；后续单独维护 action 版本。
+- 原始 `lvyrana/papermind` 继续私有。发布从临时隔离克隆生成，活动 `papermind-zotero/` 的既有未提交改动原样保留，尚未把公开提交合入该本地开发目录；后续接续先比较远端 `edc3460`，不要覆盖现场。原 `Desktop/papermind-source` 旧克隆本轮未改。
+- 干净发布副本与 `PUBLICATION-RECEIPT.json` 归档于 `release-candidates/2026-10-16/public-source/`，不含 node_modules、dist 或用户数据。下一项为 0.7.0 原生 Zotero 登录、重启后会话与记录恢复、退出及插件升级验收。
 
 ## 2026-10-16：正式网站上线完成
 

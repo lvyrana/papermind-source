@@ -7,13 +7,14 @@ from pathlib import Path, PurePosixPath
 from check_public_release import check, inspect_file
 
 ROOT_FILES = {"README.md", "CHANGELOG.md", "DECISIONS.md", "PRIVACY.md", "SECURITY.md",
-              "SUPPORT.md", "LICENSE", ".gitignore", "manifest.json", "build.sh", "icon.svg",
+              "SUPPORT.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "RELEASE_NOTES.md", ".gitignore", "manifest.json", "build.sh", "icon.svg",
               "bootstrap.js", "sidebar.js", "reader-context.js", "workspace.js", "account.js"}
+PUBLIC_DOCS = {"docs/screenshots/reading-card-20261022.png", "docs/screenshots/README.md"}
 
 
 def included(name):
     path = PurePosixPath(name)
-    return (name in ROOT_FILES
+    return (name in ROOT_FILES or name in PUBLIC_DOCS
             or len(path.parts) == 1 and path.name.startswith("test-") and path.suffix == ".mjs"
             or path.parts[0] in {"scripts", ".github"} and path.suffix in {".mjs", ".yml", ".yaml"}
             or path.parts[0] == "locale" and path.suffix == ".ftl")

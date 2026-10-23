@@ -1,0 +1,5 @@
+# Optional official Vercel Blob SDK; older <0.5 releases were unrelated.
+# Keep VPS requirements unchanged. Compile with the application's constraints.
+vercel-blob==0.5.0 \
+    --hash=sha256:12168f22d2497916574d67ac955d99a0c7ed6d4291b988a51416e15d07d282ed \
+    --hash=sha256:0e42ceba8f0aa51aeb67fa1c86dc3ba4a4a078326bd2272c09580a9756231acb

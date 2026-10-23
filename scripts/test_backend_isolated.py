@@ -22,6 +22,11 @@ def main():
         for name in ("manifest.json", "papermind-connector.xpi"):
             shutil.copy2(root / "zotero-plugin" / name, target / "zotero-plugin" / name)
         env = dict(os.environ)
+        # Never let developer cloud credentials turn an isolated test into a
+        # production database test. Explicit cloud tests inject synthetic env.
+        for key in list(env):
+            if key in {"PAPERMIND_SQL_BACKEND", "PAPERMIND_FILE_BACKEND", "BLOB_STORE_ID", "BLOB_READ_WRITE_TOKEN", "VERCEL_OIDC_TOKEN"} or key.startswith(("PAPERMIND_LIBRARY_", "PAPERMIND_AUTH_", "PAPERMIND_RUNTIME_")):
+                env.pop(key)
         for key in ("QWEN_API_KEY", "GLM_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
                     "SENTRY_DSN", "OWNER_UID", "ZOTERO_OAUTH_CLIENT_KEY", "ZOTERO_OAUTH_CLIENT_SECRET", "PAPERMIND_PUBLIC_ORIGIN"):
             env[key] = ""

@@ -1,0 +1,7 @@
+{
+  "name": "litfinch-migration-preview",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "24.x" },
+  "dependencies": { "@vercel/blob": "2.8.0", "@vercel/oidc": "3.8.10" }
+}

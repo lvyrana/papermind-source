@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "fastapi",
+  "regions": ["hnd1"],
+  "functions": {
+    "api/file-grant.mjs": { "maxDuration": 60 },
+    "app.py": {
+      "maxDuration": 60,
+      "includeFiles": "{papermind/**/*.py,web/dist/**}"
+    }
+  }
+}

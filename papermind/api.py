@@ -24,16 +24,20 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from fastapi import FastAPI, Query, Request, UploadFile, File, Form, HTTPException as FastAPIHTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, RedirectResponse, FileResponse, Response, JSONResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse, FileResponse, Response, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel, Field
+from sql_backend import remote_enabled
+from time_utils import data_timestamp
 
 PDF_DIR = Path(__file__).parent / "data" / "pdfs"
-PDF_DIR.mkdir(parents=True, exist_ok=True)
+if not remote_enabled():
+    PDF_DIR.mkdir(parents=True, exist_ok=True)
 PDF_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB
 FIGURES_DIR = Path(__file__).parent / "data" / "figures"
-FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+if not remote_enabled():
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 FIGURE_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB
 
 from src.database import (
@@ -83,6 +87,10 @@ from runtime_limits import completion_async, RuntimeLimitError
 from trial_access import allowed as trial_allowed
 from storage_limits import upload_transaction
 import auth as account_auth
+import cloud_files
+import cloud_jobs
+import cloud_figures
+import cloud_maintenance
 
 # 加载 .env
 load_dotenv(Path(__file__).parent / ".env")
@@ -340,12 +348,14 @@ async def trial_admission(request: Request, call_next):
             _get_user_id(request)
         except FastAPIHTTPException as error:
             return JSONResponse({"detail": error.detail, "ok": False}, status_code=error.status_code)
+        except RuntimeLimitError as error:
+            return JSONResponse({"detail": str(error), "ok": False}, status_code=error.status_code)
     return await call_next(request)
 
 
 @app.exception_handler(RuntimeLimitError)
 async def runtime_limit_response(request, error):
-    return JSONResponse({"ok": False, "detail": str(error), "error": str(error)}, status_code=429)
+    return JSONResponse({"ok": False, "detail": str(error), "error": str(error)}, status_code=error.status_code)
 
 
 def _get_client_ip(request: Request) -> str:
@@ -358,6 +368,10 @@ def _get_client_ip(request: Request) -> str:
 
 def _require_owner(request: Request) -> str:
     """主机级配置必须显式指定 OWNER_UID；未配置时拒绝管理操作。"""
+    if remote_enabled():
+        account_auth.require_origin(request, native=True)
+        if not account_auth.identity(request):
+            raise FastAPIHTTPException(401, '请先登录账号。')
     uid = _get_user_id(request)
     if not OWNER_UID or uid != OWNER_UID:
         raise FastAPIHTTPException(status_code=403, detail="owner device required")
@@ -380,7 +394,7 @@ def _get_owned_paper_or_none(paper_id: int, user_id: str) -> Optional[dict]:
 def api_get_settings(request: Request):
     """返回当前 LLM 配置状态（内置链 + 自定义通道）"""
     uid = _get_user_id(request)
-    can_manage = bool(OWNER_UID) and uid == OWNER_UID
+    can_manage = bool(OWNER_UID) and uid == OWNER_UID and (not remote_enabled() or bool(account_auth.identity(request)))
     client, model = _get_llm_client()
     provider_name = ""
     for p in _LLM_PROVIDERS:
@@ -592,7 +606,7 @@ def api_save_profile(data: ProfileData, request: Request):
         new_summary = next_profile.get("interests_summary", "")
         next_profile["behavior_events_since_summary"] = previous.get("behavior_events_since_summary", "0")
         if new_summary != prev_summary:
-            next_profile["interests_summary_updated_at"] = datetime.now().isoformat()
+            next_profile["interests_summary_updated_at"] = data_timestamp()
         else:
             next_profile["interests_summary_updated_at"] = previous.get("interests_summary_updated_at", "")
             next_profile["interests_summary_is_manual"] = previous.get("interests_summary_is_manual", "0")
@@ -603,7 +617,13 @@ def api_save_profile(data: ProfileData, request: Request):
         _reset_user_cache(uid)
 
     # 首次生成长期骨架：放后台线程，不阻塞保存响应
+    task = None
     if not previous.get("memory_core", "").strip() and account_auth.can_use_ai(request):
+        if remote_enabled():
+            if not account_auth.identity(request):
+                return {"ok": True}
+            task = cloud_jobs.enqueue(uid, 'memory-core', uid)
+            return {"ok": True, "task": task}
         def _bg_init_core():
             try:
                 asyncio.run(ensure_memory_core(uid, get_profile(uid)))
@@ -1138,7 +1158,7 @@ JSON 格式：
 def _enrich_papers_with_llm(papers: list[dict], profile: dict, user_id: str = ""):
     """为论文添加详细中文解读和个性化相关性分析（并发执行）"""
     print(f"[api] _enrich_papers_with_llm 入口: {len(papers)} 篇论文")
-    profile_text = _build_understanding_profile_text(profile, uid)
+    profile_text = _build_understanding_profile_text(profile, user_id)
 
     is_qwen = any("qwen" in p["name"] for p in _get_llm_slots() if p["api_key"].strip())
     with ThreadPoolExecutor(max_workers=5) as pool:
@@ -1422,7 +1442,14 @@ def api_save_to_library(data: SavePaperRequest, request: Request):
             save_chat_message(row_id, role, content)
 
     # 手动添加的论文（无 summary_zh）触发后台解读
-    if not data.paper.get("summary_zh") and data.paper.get("abstract") and account_auth.can_use_ai(request):
+    task = None
+    if (os.environ.get("PAPERMIND_BACKGROUND_ENRICHMENT", "true").lower() == "true"
+            and not data.paper.get("summary_zh") and data.paper.get("abstract") and account_auth.can_use_ai(request)):
+        if remote_enabled():
+            if not account_auth.identity(request):
+                return {"ok": True, "id": row_id}
+            task = cloud_jobs.enqueue(uid, 'paper-enrich', row_id)
+            return {"ok": True, "id": row_id, "task": task}
         profile = get_profile(uid)
         t = threading.Thread(
             target=_bg_enrich_saved_paper,
@@ -1432,6 +1459,33 @@ def api_save_to_library(data: SavePaperRequest, request: Request):
         t.start()
 
     return {"ok": True, "id": row_id}
+
+
+def _cloud_job_uid(request):
+    if not remote_enabled():
+        raise FastAPIHTTPException(404, 'Cloud tasks are not enabled')
+    account_auth.require_origin(request, native=True)
+    account = account_auth.identity(request)
+    if not account:
+        raise FastAPIHTTPException(401, '请先登录账号。')
+    return _get_user_id(request)
+
+
+@app.get('/api/tasks')
+def api_get_tasks(request: Request):
+    if not remote_enabled():
+        return {'enabled': False, 'tasks': []}
+    return {'enabled': True, 'tasks': cloud_jobs.list_jobs(_cloud_job_uid(request))}
+
+
+@app.post('/api/tasks/{job_id}/run')
+async def api_run_task(job_id: str, request: Request):
+    return await cloud_jobs.run(job_id, _cloud_job_uid(request))
+
+
+@app.post('/api/tasks/{job_id}/retry')
+def api_retry_task(job_id: str, request: Request):
+    return cloud_jobs.retry(job_id, _cloud_job_uid(request))
 
 
 @app.post("/api/lookup-paper")
@@ -1482,8 +1536,12 @@ def api_get_library_paper(paper_id: int, request: Request):
     return {"paper": paper, "notes": notes, "chats": chats}
 
 @app.delete("/api/library/{paper_id}")
-def api_delete_from_library(paper_id: int, request: Request):
+async def api_delete_from_library(paper_id: int, request: Request):
     """取消收藏（需验证归属）；同步清理 PDF 与图表文件"""
+    if cloud_files.enabled():
+        uid = _cloud_file_uid(request)
+        cloud_files.retire(paper_id, uid, delete_paper=True)
+        return {"ok": True, **await cloud_files.cleanup(uid)}
     uid = _get_user_id(request)
     with upload_transaction(PDF_DIR.parent):
         if not _get_owned_paper_or_none(paper_id, uid):
@@ -1516,9 +1574,77 @@ def api_set_paper_project(paper_id: int, data: SetPaperProjectRequest, request: 
 
 # ========== Paper PDF Upload ==========
 
+class PdfUploadReservation(BaseModel):
+    size: int = Field(ge=5, le=50 * 1024 * 1024, strict=True)
+
+
+def _cloud_file_uid(request):
+    if not cloud_files.enabled():
+        raise FastAPIHTTPException(503, "本站未启用云端文件上传。")
+    identity = account_auth.identity(request)
+    if not identity:
+        raise FastAPIHTTPException(401, "请先登录。")
+    account_auth.require_origin(request, native=True)
+    return identity["data_uid"]
+
+
+@app.get("/api/file-storage")
+def api_file_storage():
+    return {"mode": "direct" if cloud_files.enabled() else "server"}
+
+
+@app.post("/api/file-storage/cleanup")
+async def api_cleanup_cloud_files(request: Request):
+    uid = _cloud_file_uid(request)
+    return {"ok": True, **await cloud_files.cleanup(uid,limit=2), **await cloud_figures.cleanup(uid,limit=2)}
+
+
+@app.post('/api/maintenance/storage')
+async def api_maintain_storage(request: Request):
+    _require_owner(request)
+    return await cloud_maintenance.run()
+
+
+@app.get('/api/maintenance/storage')
+def api_storage_maintenance_status(request: Request):
+    _require_owner(request)
+    return cloud_maintenance.status()
+
+
+@app.get('/internal/maintenance/storage')
+async def api_storage_cron(request: Request):
+    import secrets
+    secret = os.environ.get('CRON_SECRET','')
+    if len(secret) < 32:
+        raise FastAPIHTTPException(503,'定时维护尚未配置。')
+    supplied = request.headers.get('authorization','').encode()
+    if not secrets.compare_digest(supplied,('Bearer '+secret).encode()):
+        raise FastAPIHTTPException(401,'未授权。')
+    return await cloud_maintenance.run()
+
+
+@app.post("/api/library/{paper_id}/pdf-upload")
+async def api_prepare_pdf_upload(paper_id: int, data: PdfUploadReservation, request: Request):
+    uid = _cloud_file_uid(request)
+    await cloud_files.cleanup(uid, limit=1)
+    return cloud_files.reserve(paper_id, uid, data.size)
+
+
+@app.get("/api/library/{paper_id}/pdf-upload")
+def api_pdf_download_metadata(paper_id: int, request: Request):
+    return cloud_files.current(paper_id, _cloud_file_uid(request))
+
+
+@app.post("/api/library/{paper_id}/pdf-upload/{upload_id}")
+async def api_complete_pdf_upload(paper_id: int, upload_id: str, request: Request):
+    return await cloud_files.complete(paper_id, _cloud_file_uid(request), upload_id)
+
+
 @app.post("/api/library/{paper_id}/pdf")
 async def api_upload_paper_pdf(paper_id: int, request: Request, file: UploadFile = File(...)):
     """上传论文 PDF 文件，存储在服务器本地"""
+    if cloud_files.enabled():
+        raise FastAPIHTTPException(409, "云端站点请使用网页直传 PDF；旧版插件上传尚未适配。")
     uid = _get_user_id(request)
     paper = _get_owned_paper_or_none(paper_id, uid)
     if not paper:
@@ -1541,8 +1667,10 @@ async def api_upload_paper_pdf(paper_id: int, request: Request, file: UploadFile
 
 
 @app.get("/api/library/{paper_id}/pdf")
-def api_get_paper_pdf(paper_id: int, request: Request):
+async def api_get_paper_pdf(paper_id: int, request: Request):
     """获取已上传的论文 PDF"""
+    if cloud_files.enabled():
+        return await cloud_files.download(paper_id, _cloud_file_uid(request))
     uid = _get_user_id(request)
     if not _get_owned_paper_or_none(paper_id, uid):
         raise FastAPIHTTPException(status_code=403, detail="forbidden")
@@ -1556,6 +1684,10 @@ def api_get_paper_pdf(paper_id: int, request: Request):
 @app.head("/api/library/{paper_id}/pdf")
 def api_head_paper_pdf(paper_id: int, request: Request):
     """前端用 HEAD 探测是否已上传本地 PDF（FastAPI 的 GET 不自动支持 HEAD）"""
+    if cloud_files.enabled():
+        row = cloud_files.current(paper_id, _cloud_file_uid(request))
+        return Response(media_type="application/pdf", headers={"Content-Length": str(row["size"]),
+                        "Cache-Control": "private, no-store"})
     uid = _get_user_id(request)
     if not _get_owned_paper_or_none(paper_id, uid):
         raise FastAPIHTTPException(status_code=403, detail="forbidden")
@@ -1566,8 +1698,12 @@ def api_head_paper_pdf(paper_id: int, request: Request):
 
 
 @app.delete("/api/library/{paper_id}/pdf")
-def api_delete_paper_pdf(paper_id: int, request: Request):
+async def api_delete_paper_pdf(paper_id: int, request: Request):
     """删除已上传的论文 PDF"""
+    if cloud_files.enabled():
+        uid = _cloud_file_uid(request)
+        cloud_files.retire(paper_id, uid)
+        return {"ok": True, **await cloud_files.cleanup(uid)}
     uid = _get_user_id(request)
     with upload_transaction(PDF_DIR.parent):
         if not _get_owned_paper_or_none(paper_id, uid):
@@ -1754,6 +1890,9 @@ def api_patch_board_item(item_id: int, data: BoardItemPatchRequest, request: Req
 
 @app.delete("/api/board/items/{item_id}")
 def api_delete_board_item(item_id: int, request: Request):
+    if cloud_files.enabled():
+        cloud_figures.retire_item(item_id, _cloud_file_uid(request))
+        return {'ok': True}
     uid = _get_user_id(request)
     with upload_transaction(FIGURES_DIR.parent):
         if get_board_item_owner(item_id) != uid:
@@ -1765,6 +1904,26 @@ def api_delete_board_item(item_id: int, request: Request):
     return {"ok": True}
 
 
+class FigureUploadReservation(BaseModel):
+    size: int = Field(ge=8, le=10 * 1024 * 1024, strict=True)
+    mime: str = Field(max_length=20)
+    section: str = Field(min_length=1, max_length=40)
+    page: Optional[int] = Field(default=None, ge=1, strict=True)
+    caption: str = Field(default='', max_length=8000)
+
+
+@app.post('/api/board/{paper_rowid}/figure-upload')
+async def api_prepare_figure(paper_rowid: int, data: FigureUploadReservation, request: Request):
+    uid = _cloud_file_uid(request)
+    await cloud_figures.cleanup(uid,limit=1)
+    return cloud_figures.reserve(paper_rowid,uid,**data.model_dump())
+
+
+@app.post('/api/board/{paper_rowid}/figure-upload/{upload_id}')
+async def api_complete_figure(paper_rowid: int, upload_id: str, request: Request):
+    return await cloud_figures.complete(paper_rowid,_cloud_file_uid(request),upload_id)
+
+
 @app.post("/api/board/{paper_rowid}/figures")
 async def api_add_board_figure(
     paper_rowid: int, request: Request,
@@ -1774,6 +1933,8 @@ async def api_add_board_figure(
     caption: str = Form(""),
 ):
     """图表截图入板：保存 PNG + 创建 source=figure 的条目"""
+    if cloud_files.enabled():
+        raise FastAPIHTTPException(409, '云端图表请使用直传入口。')
     uid = _get_user_id(request)
     paper = _get_owned_paper_or_none(paper_rowid, uid)
     if not paper:
@@ -1801,8 +1962,13 @@ async def api_add_board_figure(
 
 
 @app.get("/api/board/{paper_rowid}/figures/{name}")
-def api_get_board_figure(paper_rowid: int, name: str, request: Request):
+async def api_get_board_figure(paper_rowid: int, name: str, request: Request):
     """图表图片；同源 img 请求使用设备 cookie 校验归属。"""
+    if cloud_files.enabled():
+        row = cloud_figures.current(paper_rowid,_cloud_file_uid(request),name)
+        content = await cloud_figures.read_bytes(row)
+        return StreamingResponse((content[i:i+65536] for i in range(0,len(content),65536)),media_type=row['mime'],
+                                 headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Length':str(len(content))})
     uid = _get_user_id(request)
     if not _get_owned_paper_or_none(paper_rowid, uid):
         return PlainTextResponse("not found", status_code=404)
@@ -1825,6 +1991,7 @@ def api_export_board_marp(paper_rowid: int, request: Request):
         return PlainTextResponse("not found", status_code=404)
     board = get_or_create_board(paper_rowid, why_reading=paper.get("relevance") or "")
     items = get_board_items(paper_rowid)
+    cloud_images = cloud_figures.export_images(paper_rowid,_cloud_file_uid(request),items) if cloud_files.enabled() else {}
     mark_exported(paper_rowid)
     by_section: dict = {}
     for it in items:
@@ -1866,9 +2033,10 @@ def api_export_board_marp(paper_rowid: int, request: Request):
             # 图表条目：base64 内联进 md，导出文件单独可用（Marp 支持 data URI）
             if it.get("image"):
                 fig_path = FIGURES_DIR / it["image"]
-                if fig_path.exists():
+                if it['image'] in cloud_images or (not cloud_files.enabled() and fig_path.exists()):
                     mime = "image/png" if it["image"].endswith(".png") else "image/jpeg"
-                    b64 = base64.b64encode(fig_path.read_bytes()).decode()
+                    content = cloud_images[it['image']] if cloud_files.enabled() else fig_path.read_bytes()
+                    b64 = base64.b64encode(content).decode()
                     lines.append(f"![h:420](data:{mime};base64,{b64})")
                     lines.append("")
                     lines.append(esc(it["content"]))
@@ -1885,6 +2053,10 @@ def api_export_board_marp(paper_rowid: int, request: Request):
             elif it.get("page"):
                 lines.append(f"  > P.{it['page']}")
     md = "\n".join(lines) + "\n"
+    if cloud_files.enabled():
+        content = md.encode('utf-8')
+        return StreamingResponse((content[i:i+65536] for i in range(0,len(content),65536)),media_type='text/markdown; charset=utf-8',
+                                 headers={'Content-Disposition':_content_disposition(paper.get('title'),'marp.md'),'Cache-Control':'private, no-store'})
     return PlainTextResponse(
         md,
         media_type="text/markdown; charset=utf-8",
@@ -1960,6 +2132,7 @@ def api_export_board_pptx(paper_rowid: int, request: Request):
 
     board = get_or_create_board(paper_rowid, why_reading=paper.get("relevance") or "")
     items = get_board_items(paper_rowid)
+    cloud_images = cloud_figures.export_images(paper_rowid,_cloud_file_uid(request),items) if cloud_files.enabled() else {}
     mark_exported(paper_rowid)
     by_section: dict = {}
     for it in items:
@@ -2081,23 +2254,33 @@ def api_export_board_pptx(paper_rowid: int, request: Request):
             # 图表条目：单独成页，避免和正文抢空间导致压字
             if it.get("image"):
                 fig = FIGURES_DIR / it["image"]
-                if fig.exists():
+                if it['image'] in cloud_images or (not cloud_files.enabled() and fig.exists()):
                     try:
                         fig_slide, fig_tf = new_section_slide(sec["title"], True)
                         fp = fig_tf.paragraphs[0]
                         fp.text = esc(it["content"])[:60] or "图表"
                         fp.runs[0].font.size, fp.runs[0].font.color.rgb = Pt(13), GRAY
                         fig_slide.shapes.add_picture(
-                            str(fig), Inches(2.6), Inches(2.2), height=Inches(4.4))
+                            io.BytesIO(cloud_images[it['image']]) if cloud_files.enabled() else str(fig), Inches(2.6), Inches(2.2), height=Inches(4.4))
                         # 图表页已独立成页；后续条目回到「未开新页」状态，
                         # 等真的有内容时再开，避免留下只有标题的空白页
                         slide, tf, used, first = None, None, 0, True
                     except Exception:
-                        pass
+                        if cloud_files.enabled():
+                            raise FastAPIHTTPException(422,'图表无法写入 PPT，请检查图片后重试。') from None
 
     buf = io.BytesIO()
     prs.save(buf)
     buf.seek(0)
+    if cloud_files.enabled():
+        def chunks():
+            try:
+                while chunk := buf.read(65536):
+                    yield chunk
+            finally:
+                buf.close()
+        return StreamingResponse(chunks(),media_type='application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                                 headers={'Content-Disposition':_content_disposition(paper.get('title'),'pptx'),'Cache-Control':'private, no-store'})
     return Response(
         buf.read(),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",

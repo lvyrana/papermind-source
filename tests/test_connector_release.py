@@ -10,6 +10,19 @@ from prepare_connector_release import prepare
 
 
 class ConnectorReleaseTests(unittest.TestCase):
+    def test_notices_and_reviewed_screenshot_survive_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, output = Path(directory) / "repo", Path(directory) / "candidate"
+            self.fixture(root)
+            (root / "THIRD_PARTY_NOTICES.md").write_text("Synthetic notice.\n")
+            (root / "docs/screenshots").mkdir(parents=True)
+            for name in ("reading-card-20261022.png", "private.png", "reading-card-20261022.png.bak"):
+                (root / "docs/screenshots" / name).write_bytes(b"synthetic image fixture")
+            prepare(root, output)
+            self.assertTrue((output / "THIRD_PARTY_NOTICES.md").exists())
+            self.assertEqual([p.name for p in (output / "docs/screenshots").iterdir()],
+                             ["reading-card-20261022.png"])
+
     def fixture(self, root):
         root.mkdir()
         subprocess.run(["git", "init", "-q", str(root)], check=True)

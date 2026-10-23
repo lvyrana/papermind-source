@@ -22,6 +22,8 @@ import {
   shouldOcrPage,
 } from '../utils/selectionText'
 import { retryAsync } from '../utils/retryAsync'
+import { uploadPaperPdf } from '../utils/uploadPaperPdf'
+import { uploadBoardFigure } from '../utils/uploadBoardFigure'
 
 /* ─────────────────────────────────────────────────────────────
    PaperRead — 三栏版 (PDF + 记忆通道)
@@ -587,21 +589,13 @@ export default function PaperRead() {
       let ok = false
       let failReason = ''
       if (boardSeed.imageBlob) {
-        // 图表截图走 multipart，后端存图 + 建 source=figure 条目
-        const fd = new FormData()
-        fd.append('file', boardSeed.imageBlob, 'figure.png')
-        fd.append('section', sectionKey)
-        if (boardSeed.page) fd.append('page', String(boardSeed.page))
         const controller = new AbortController()
-        const timer = window.setTimeout(() => controller.abort(), BOARD_SEND_TIMEOUT_MS)
+        const timer = window.setTimeout(() => controller.abort(), 90000)
         let d
         try {
-          const res = await fetch(`${API_BASE}/board/${rowId}/figures`, {
-            method: 'POST', headers: { 'X-User-ID': getUserId() }, body: fd,
-            signal: controller.signal,
-          })
-          if (!res.ok) throw new Error(`API error: ${res.status}`)
-          d = await res.json()
+          d = await uploadBoardFigure(rowId,boardSeed.imageBlob,getUserId(),{
+            section:sectionKey,page:boardSeed.page || null,
+          },controller.signal)
         } finally {
           window.clearTimeout(timer)
         }
@@ -740,14 +734,7 @@ export default function PaperRead() {
     try {
       const rowId = await ensureSaved()
       if (!rowId) return
-      const form = new FormData()
-      form.append('file', file)
-      const resp = await fetch(`${API_BASE}/library/${rowId}/pdf`, {
-        method: 'POST',
-        headers: { 'X-User-ID': getUserId() },
-        body: form,
-      })
-      const data = await resp.json()
+      const data = await uploadPaperPdf(rowId, file, getUserId())
       if (data.ok) {
         const localUrl = `${API_BASE}/library/${rowId}/pdf`
         setPdfUrlLoading(false)
@@ -757,7 +744,7 @@ export default function PaperRead() {
       } else {
         setPdfUrlError(data.detail || '上传失败，请确认是 PDF 文件')
       }
-    } catch { setPdfUrlError('上传失败，请重试') }
+    } catch (error) { setPdfUrlError(error.message || '上传失败，请重试') }
     finally { setUploadingPdf(false) }
   }
 

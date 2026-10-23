@@ -32,6 +32,8 @@ PaperMind 主项目原创代码采用 [AGPL-3.0-only](LICENSE)。本文件列明
 
 这些条目仅覆盖直接依赖，不代表已经收齐间接依赖的许可证。
 
+2026-10-22 迁移准备将 Vite 固定为 8.3.5，相关 Rolldown 1.2.15、PostCSS 8.5.31、nanoid 3.3.20 与类型包随锁文件更新；这些变更包的锁文件许可均为 MIT。构建工具修补不改变主项目许可，目标平台二进制声明仍须按实际载荷收集。
+
 PDF.js 同时声明可选 Node 依赖 `@napi-rs/canvas`（当前锁定 1.0.9，MIT）及平台二进制包；本阅读器使用浏览器 canvas，不把 Node 原生模块作为运行路径。若另行分发 `node_modules` 或原生二进制，仍须核对它们携带的第三方许可，不能以此清单代替完整声明。
 
 构建链间接依赖 [source-map-js](https://github.com/7rulnik/source-map-js) 为 BSD-3-Clause；2026-10-08 将锁定版本从 1.2.1 更新到上游修正版 1.2.2，处理 GHSA-68fv-2mgg-jv7q。现有纯源码导出不带安装目录；构建/安装包仍需保留其实际许可正文。9 月 28 日收集记录是当时环境，不代表后续依赖版本未变化。
@@ -54,7 +56,11 @@ PDF.js 同时声明可选 Node 依赖 `@napi-rs/canvas`（当前锁定 1.0.9，M
 
 `python-pptx` 使用 Pillow、lxml、XlsxWriter 等间接依赖；`httpx[socks]` 引入 socksio。Uvicorn extras、FastAPI、HTTP 和模型 SDK 也带入间接依赖，二进制发布前须按实际环境核对。不能把“主依赖的许可证”视为整个分发包的统一许可证。
 
+可选 Vercel/Turso 适配另在 `deploy/requirements-turso.txt` 固定 `libsql==0.1.11`，采用 MIT License（Copyright 2023 the libSQL authors），上游为 [libsql-python](https://github.com/tursodatabase/libsql-python)。本轮已核对该 macOS 安装包随附的 `LICENSE.md`；未更改现站依赖锁，也未分发其原生二进制。云端 Linux 构建仍需按实际 wheel 收集许可与间接组件声明。驱动许可不替代 Turso 托管服务条款。
+
 ## 外部 API
+
+2026-10-22 私有文件迁移预览新增官方 `@vercel/blob` 2.8.0（Apache-2.0）用于 Node 函数签发限时、限文件、限大小的上传地址；锁文件位于 `deploy/vercel-preview/package-lock.json`。服务端流式读取使用官方 `vercel-blob` 0.5.0（安装包元数据及随附 LICENSE 为 MIT），受 `deploy/requirements-blob.txt` 版本和哈希约束。两者仅用于测试部署，不改变 VPS 依赖或主项目授权；间接依赖和实际部署 wheel 的完整许可须随最终分发载荷核对。SDK 许可不替代 Vercel 托管服务条款。
 
 | 服务 | 用途 | 许可 |
 |------|------|------|
@@ -75,6 +81,8 @@ PDF.js 同时声明可选 Node 依赖 `@napi-rs/canvas`（当前锁定 1.0.9，M
 `web/index.html` 通过 `fonts.googleapis.cn` / `fonts.gstatic.cn` 请求字体，浏览器会联系这些服务；关闭 Sentry 不等于网页完全不发生第三方请求。离线部署可改用系统字体；若打包字体文件，需附带相应 OFL 文本。
 
 ## 文献内容与 Zotero Connector
+
+2026-10-22 按实际 Connector 0.7.0 XPI 重新核对：安装包只包含插件脚本、配置、图标、翻译与许可文件，不包含本网站的 npm/Python 依赖、字体或平台二进制。上文 5 个全文缺失项属于网站安装环境，不能据此判定 Connector 缺少这 5 项许可。插件新增独立 `THIRD_PARTY_NOTICES.md`，构建逐项核对 11 个成员与源码、完整 LICENSE；宿主 Zotero/PDF.js 与远程服务另行说明。
 
 ### 免费试读论文
 

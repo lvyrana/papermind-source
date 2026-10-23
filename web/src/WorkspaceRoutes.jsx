@@ -11,6 +11,7 @@ import { setUserId, consumeUidSwitchFlag } from './api'
 import AccountGate from './components/AccountGate'
 import { useAccount } from './accountContext'
 import { switchAccountCache } from './auth'
+import PendingTasks from './components/PendingTasks'
 
 const CACHE_KEY_PREFIXES = ['paper-notes-', 'paper-chat-', 'paper-bookmark-']
 const CACHE_KEY_EXACT = [
@@ -64,6 +65,7 @@ function WorkspaceRoutes() {
   return (
     <AccountGate><div className="min-h-screen bg-cream bg-flowing">
       <UidHandler />
+      <PendingTasks />
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/onboarding" element={<Onboarding />} />

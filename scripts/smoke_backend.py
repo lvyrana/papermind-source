@@ -74,6 +74,9 @@ def main():
         env = {**os.environ, **dict.fromkeys(("QWEN_API_KEY", "GLM_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "OWNER_UID", "SENTRY_DSN",
                "ZOTERO_OAUTH_CLIENT_KEY", "ZOTERO_OAUTH_CLIENT_SECRET", "PAPERMIND_PUBLIC_ORIGIN"), ""), "PAPERMIND_INVITE_ONLY": "false"}
         env.pop("PYTHONPATH", None)
+        for key in list(env):
+            if key == "PAPERMIND_SQL_BACKEND" or key.startswith(("PAPERMIND_LIBRARY_", "PAPERMIND_AUTH_", "PAPERMIND_RUNTIME_")):
+                env.pop(key)
         checks = [("/api/settings", 200), ("/api/library", 200), ("/api/pdf-proxy?url=https%3A%2F%2F127.0.0.1%2Fprivate", 400)]
         with server(target, env) as request:
             for path, expected in checks:

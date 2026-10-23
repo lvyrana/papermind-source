@@ -1,0 +1,24 @@
+# Server-only settings. Fill in the Vercel Production environment, never Git.
+# Leave cutover disabled until separate production resources and import pass.
+PAPERMIND_MIGRATION_APPROVED=false
+PAPERMIND_SQL_BACKEND=turso
+PAPERMIND_FILE_BACKEND=vercel-blob
+PAPERMIND_PUBLIC_ORIGIN=https://papermindapp.com
+# Review against the existing site's approved access policy before activation.
+# These proposed restrictions must not silently lock out existing trial users.
+PAPERMIND_INVITE_ONLY=true
+PAPERMIND_REQUIRE_AI_LOGIN=true
+PAPERMIND_BACKGROUND_ENRICHMENT=true
+OWNER_UID=
+ZOTERO_OAUTH_CLIENT_KEY=
+ZOTERO_OAUTH_CLIENT_SECRET=
+CRON_SECRET=
+BLOB_STORE_ID=
+PAPERMIND_LIBRARY_TURSO_DATABASE_URL=
+PAPERMIND_LIBRARY_TURSO_AUTH_TOKEN=
+PAPERMIND_AUTH_TURSO_DATABASE_URL=
+PAPERMIND_AUTH_TURSO_AUTH_TOKEN=
+PAPERMIND_RUNTIME_TURSO_DATABASE_URL=
+PAPERMIND_RUNTIME_TURSO_AUTH_TOKEN=
+# Retain the existing approved model provider configuration separately.
+# Do not enable synthetic mode, copy Preview tokens, or expose keys via VITE_*.

@@ -19,12 +19,12 @@
 
 ## 两个入口
 
-- **网页版（本仓库）**：React 前端、Python/FastAPI 后端、SQLite 存储，以及部署、测试、备份脚本。支持直接上传 PDF、论文检索和精读。
-- **Zotero 客户端（独立仓库）**：在 Zotero 内阅读、追问和整理卡片，也可将论文送入网页版。[0.7.0 预发布包](https://github.com/lvyrana/papermind-zotero/releases/tag/preview-0.7.0)供小范围手动安装；自动更新保持正式版 0.3.0。
+- **网页版（本仓库）**：React 前端、Python/FastAPI 后端；本地使用 SQLite，云端支持 Vercel + Turso + 私有 Blob。支持上传 PDF、论文检索、精读和汇报导出。
+- **Zotero 客户端（独立仓库）**：在 Zotero 内阅读、追问和整理卡片，也可将论文送入网页版。下载 [0.7.1 稳定包](https://github.com/lvyrana/papermind-zotero/releases/tag/v0.7.1)手动安装；旧用户自动更新清单保持 0.3.0。
 
 2026-10-16 源码包含已上线的产品首页、免费试读、Zotero 身份登录、统一配色和设置页精简。网站与插件沿用原 PaperMind 技术标识，显示名称为「研雀 · LitFinch」。插件本地阅读记录与网页记录分别保存。
 
-2026-10-22，插件 0.7.0 已在 macOS / Zotero 9.0.6 完成真实登录、重启恢复和退出验收。Windows、Linux 与其他 Zotero 版本尚未原生验收。
+2026-10-23：正式网站已迁至 Vercel，原网址不变；当前源码包含私有文件直传、持久任务、共享预算、云端备份和 Vite 8.3.5。部署步骤见 [云端部署与维护](docs/vercel-deployment.md)。插件 0.7.1 已在 macOS / Zotero 9.0.6 完成真实登录、进程重启恢复、PDF 上传和退出验收。Windows、Linux 与其他 Zotero 版本尚未原生验收。
 
 ## 核心功能
 
@@ -71,9 +71,9 @@ papermind/.venv_new/bin/python scripts/smoke_backend.py
 (cd web && npm run test:pdf-reader && npm run test:accounts && npm run test:public-entry)
 ```
 
-浏览器检查使用 Playwright；通过 `PAPERMIND_CHROMIUM_EXECUTABLE` 指定已有 Chrome/Edge，或安装 Playwright Chromium。测试使用独立资料目录和合成数据。GitHub Actions 执行后端、前端、依赖审计与三组浏览器检查。
+完整后端测试还需要云端可选 SDK：`papermind/.venv_new/bin/python -m pip install --require-hashes -r deploy/vercel-preview/requirements.txt`。浏览器检查使用 Playwright；通过 `PAPERMIND_CHROMIUM_EXECUTABLE` 指定已有 Chrome/Edge，或安装 Playwright Chromium。测试使用独立资料目录和合成数据。GitHub Actions 执行后端、前端、依赖审计与三组浏览器检查。
 
-业务数据保存在 `papermind/data/`。完整备份包含数据库、上传附件和已有账号归属库：
+本地模式的业务数据保存在 `papermind/data/`。本地完整备份包含数据库、上传附件和已有账号归属库；云端使用独立的 [备份与恢复流程](docs/vercel-deployment.md#备份与恢复)：
 
 ```bash
 bash scripts/backup_local.sh
@@ -86,6 +86,7 @@ python3.12 scripts/backup_data.py verify backups/snapshot-实际名称
 
 - [精读功能说明](docs/deep-reading-overview.md)
 - [部署、备份与恢复](docs/deployment-recovery.md)
+- [Vercel 云端部署](docs/vercel-deployment.md)
 - [Zotero 登录](docs/zotero-login.md)
 - [变更记录](CHANGELOG.md)与[技术决策](DECISIONS.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)

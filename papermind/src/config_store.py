@@ -6,6 +6,7 @@
 import json
 from pathlib import Path
 from typing import Optional
+from sql_backend import remote_enabled
 
 CONFIG_PATH = Path(__file__).parent.parent / "data" / "config.json"
 PROFILE_PATH = Path(__file__).parent.parent / "data" / "profile.json"
@@ -14,11 +15,17 @@ def _ensure_data_dir():
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 def _read_json(path: Path) -> dict:
+    if remote_enabled():
+        from cloud_state import read_config
+        return read_config('config' if path == CONFIG_PATH else 'legacy-profile')
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 def _write_json(path: Path, data: dict):
+    if remote_enabled():
+        from cloud_state import write_config
+        return write_config('config' if path == CONFIG_PATH else 'legacy-profile', data)
     _ensure_data_dir()
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -76,6 +83,9 @@ def get_custom_provider() -> dict:
 
 def save_custom_provider(cfg: dict):
     """保存自定义 LLM 配置（只收录已知字段）"""
+    if remote_enabled():
+        from cloud_state import write_config
+        return write_config('config', {'custom_provider': {k: cfg.get(k, v) for k, v in CUSTOM_PROVIDER_DEFAULTS.items()}}, patch=True)
     data = _read_json(CONFIG_PATH)
     data["custom_provider"] = {k: cfg.get(k, v) for k, v in CUSTOM_PROVIDER_DEFAULTS.items()}
     _write_json(CONFIG_PATH, data)

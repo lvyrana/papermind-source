@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "fastapi",
+  "regions": ["hnd1"],
+  "redirects": [{ "source": "/:path*", "has": [{ "type": "host", "value": "www.papermindapp.com" }], "destination": "https://papermindapp.com/:path*", "permanent": true }],
+  "functions": {
+    "api/file-grant.mjs": { "maxDuration": 60 },
+    "app.py": { "maxDuration": 60, "includeFiles": "{papermind/**/*.py,web/dist/**,zotero-plugin/manifest.json,zotero-plugin/papermind-connector.xpi}" }
+  },
+  "crons": [{ "path": "/internal/maintenance/storage", "schedule": "0 3 * * *" }]
+}

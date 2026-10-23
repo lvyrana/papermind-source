@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from time_utils import data_timestamp, elapsed_seconds
 
 from llm_router import _llm_chat_complete_async
 from src.database import (
@@ -93,7 +93,7 @@ def _enforce_recent_length(text: str, max_chars: int = 180) -> str:
     return shortened
 
 
-async def ensure_memory_core(uid: str, profile: dict) -> tuple[str, bool]:
+async def ensure_memory_core(uid: str, profile: dict, *, persist: bool = True) -> tuple[str, bool]:
     existing = (profile.get("memory_core") or "").strip()
     if existing:
         return existing, False
@@ -150,9 +150,10 @@ async def ensure_memory_core(uid: str, profile: dict) -> tuple[str, bool]:
         **profile,
         "memory_core": core,
         "core_source": "auto_initial",
-        "last_core_merged_at": datetime.now().isoformat(),
+        "last_core_merged_at": data_timestamp(),
     }
-    save_profile(uid, updated_profile)
+    if persist:
+        save_profile(uid, updated_profile)
     return core, True
 
 
@@ -167,7 +168,7 @@ async def maybe_auto_refresh_memory_core(uid: str, profile: dict) -> bool:
         last_merged = profile.get("last_core_merged_at", "")
         if last_merged:
             try:
-                if (datetime.now() - datetime.fromisoformat(last_merged)).total_seconds() < AUTO_CORE_REFRESH_DAYS * 86400:
+                if elapsed_seconds(last_merged) < AUTO_CORE_REFRESH_DAYS * 86400:
                     return False
             except Exception:
                 pass
@@ -201,7 +202,7 @@ async def maybe_auto_refresh_memory_core(uid: str, profile: dict) -> bool:
         **profile,
         "memory_core": core,
         "core_source": "auto_refresh",
-        "last_core_merged_at": datetime.now().isoformat(),
+        "last_core_merged_at": data_timestamp(),
     }
     save_profile(uid, updated_profile)
     return True
@@ -258,7 +259,7 @@ async def update_stated_memory(uid: str, days: int = RECENT_WINDOW_DAYS) -> dict
     except (json.JSONDecodeError, TypeError):
         return {"ok": True, "skipped": True, "reason": "parse_failed"}
 
-    now = datetime.now().isoformat()
+    now = data_timestamp()
     seen = {(it.get("text") or "").strip() for it in existing}
     merged = list(existing)
     for text in items:
@@ -291,7 +292,7 @@ async def update_memory_recent(uid: str, force: bool = False) -> dict:
     time_elapsed = 0
     if last_updated:
         try:
-            time_elapsed = (datetime.now() - datetime.fromisoformat(last_updated)).total_seconds()
+            time_elapsed = elapsed_seconds(last_updated)
         except Exception:
             pass
 
@@ -348,7 +349,7 @@ async def update_memory_recent(uid: str, force: bool = False) -> dict:
     updated_profile = {
         **profile,
         "memory_recent": recent,
-        "last_recent_updated_at": datetime.now().isoformat(),
+        "last_recent_updated_at": data_timestamp(),
     }
     save_profile(uid, updated_profile)
     reset_recent_events(uid)
@@ -417,7 +418,7 @@ async def merge_recent_to_core(uid: str) -> dict:
         "memory_core": core,
         "memory_recent": "",
         "core_source": "manual_confirmed",
-        "last_core_merged_at": datetime.now().isoformat(),
+        "last_core_merged_at": data_timestamp(),
         "last_recent_updated_at": "",
     }
     save_profile(uid, updated_profile)

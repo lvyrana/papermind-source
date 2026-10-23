@@ -21,6 +21,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
+from sql_backend import connect_remote, remote_enabled
 
 AUTH_DB = Path(__file__).parent / "data" / "auth.sqlite3"
 SESSION_COOKIE = "pm_session"
@@ -60,7 +61,28 @@ def can_use_ai(request):
 
 
 @contextmanager
-def db():
+def db(*, readonly=False):
+    if remote_enabled():
+        conn = connect_remote("auth")
+        try:
+            # Identity/ownership lookups are single SELECTs. A remote write
+            # transaction here serializes the reader's parallel API requests
+            # and can expire while queued behind other reads.
+            if not readonly:
+                conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            if not readonly:
+                conn.commit()
+        except BaseException:
+            if not readonly:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass  # Preserve the original failure if Turso rolled back already.
+            raise
+        finally:
+            conn.close()
+        return
     AUTH_DB.parent.mkdir(parents=True, exist_ok=True)
     # Fail closed on a symlink; do not follow it to an unrelated file.
     fd = os.open(AUTH_DB, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -183,9 +205,9 @@ def identity(request):
         token = cookies.get(SESSION_COOKIE, "")
     if not token:
         return None
-    if not AUTH_DB.exists():
+    if not remote_enabled() and not AUTH_DB.exists():
         raise HTTPException(401, "登录已过期，请重新登录。")
-    with db() as conn:
+    with db(readonly=True) as conn:
         row = conn.execute("SELECT a.* FROM accounts a JOIN sessions s ON a.id=s.account_id WHERE s.hash=? AND s.expires>?",
                            (digest(token), int(time.time()))).fetchone()
     if not row:
@@ -196,9 +218,9 @@ def identity(request):
 
 
 def namespace_claimed(uid):
-    if not AUTH_DB.exists():
+    if not remote_enabled() and not AUTH_DB.exists():
         return False
-    with db() as conn:
+    with db(readonly=True) as conn:
         return bool(conn.execute("SELECT 1 FROM accounts WHERE data_uid=?", (uid,)).fetchone())
 
 
@@ -353,7 +375,7 @@ def logout(request: Request):
     authorization = request.headers.get("Authorization", "")
     require_origin(request, native=authorization.startswith("Bearer "))
     token = authorization[7:] if authorization.startswith("Bearer ") else request.cookies.get(SESSION_COOKIE, "")
-    if token and AUTH_DB.exists():
+    if token and (remote_enabled() or AUTH_DB.exists()):
         with db() as conn:
             conn.execute("DELETE FROM sessions WHERE hash=?", (digest(token),))
     response = no_store(JSONResponse({"ok": True}))

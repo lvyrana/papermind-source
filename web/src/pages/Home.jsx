@@ -6,7 +6,8 @@ import {
 } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import TourBubble from '../components/TourBubble'
-import { apiGet, apiPost, API_BASE, getUserId } from '../api'
+import { apiGet, apiPost, getUserId } from '../api'
+import { uploadPaperPdf } from '../utils/uploadPaperPdf'
 
 /* ─────────────────────────────────────────────────────────────
    HOME — 研究地形版 · "papermind 还记得"
@@ -282,25 +283,16 @@ export default function Home() {
         source: 'local_pdf',
         category: '本地精读',
         relevance: '你手动上传的 PDF。',
-        has_pdf: true,
+        has_pdf: false,
       }
       const saved = await apiPost('/library/save', { paper, chats: [] })
       if (!saved.ok || !saved.id) throw new Error('save_failed')
-      const form = new FormData()
-      form.append('file', file)
-      const resp = await fetch(`${API_BASE}/library/${saved.id}/pdf`, {
-        method: 'POST',
-        headers: { 'X-User-ID': getUserId() },
-        body: form,
-      })
-      const payload = await resp.json().catch(() => ({}))
-      if (!resp.ok || payload.ok === false) {
-        throw new Error(payload.detail || 'upload_failed')
-      }
+      await uploadPaperPdf(saved.id, file, getUserId())
+      paper.has_pdf = true
       localStorage.setItem(`paper-bookmark-${saved.id}`, String(saved.id))
       navigate(`/paper/${saved.id}?library=1`, { state: { paper } })
-    } catch {
-      setQuickError('PDF 上传失败。请确认文件没有损坏且小于 50MB。')
+    } catch (error) {
+      setQuickError(error.message || 'PDF 上传失败。请确认文件没有损坏且小于 50MB。')
     } finally {
       setQuickUploading(false)
     }

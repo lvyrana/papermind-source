@@ -12,6 +12,7 @@ from openai import AsyncOpenAI, OpenAI
 
 from src.config_store import get_custom_provider
 from runtime_limits import completion_async, RuntimeLimitError
+from sql_backend import remote_enabled
 
 
 load_dotenv(Path(__file__).parent / ".env")
@@ -131,6 +132,8 @@ def _get_custom_slots() -> list[dict]:
     """用户在设置页配置的自定义 API，永远排在内置链之前。"""
     try:
         cfg = get_custom_provider()
+    except RuntimeLimitError:
+        raise
     except Exception:
         return []
     if not cfg.get("enabled"):
@@ -176,6 +179,9 @@ def _provider_key(provider: dict) -> str:
 
 
 def _is_provider_cooled(provider: dict) -> bool:
+    if remote_enabled():
+        from cloud_state import provider_cooled
+        return provider_cooled(provider)
     until = _provider_cooldown.get(_provider_key(provider))
     if until and datetime.now() < until:
         return True
@@ -183,6 +189,10 @@ def _is_provider_cooled(provider: dict) -> bool:
 
 
 def _cooldown_provider(provider: dict, seconds: int = _COOLDOWN_SECONDS):
+    if remote_enabled():
+        from cloud_state import cooldown_provider
+        cooldown_provider(provider, seconds)
+        return
     key = _provider_key(provider)
     _provider_cooldown[key] = datetime.now() + timedelta(seconds=seconds)
     print(f"[llm] ⏸ {key} 冷却 {seconds}s（配额耗尽或认证失败）")

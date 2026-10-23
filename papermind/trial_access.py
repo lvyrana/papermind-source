@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 from uuid import UUID
 from runtime_limits import file_lock
+from sql_backend import remote_enabled
 
 ACCESS_FILE = Path(__file__).parent / "data" / "trial-access.json"
 
@@ -27,6 +28,13 @@ def allowed(uid, owner="", now=None):
         return True
     if owner and uid == owner:
         return True
+    if remote_enabled():
+        from cloud_state import invitation_allowed
+        try:
+            key = key_for(uid)
+        except (ValueError, TypeError, AttributeError):
+            return False
+        return invitation_allowed(key)
     try:
         if ACCESS_FILE.is_symlink():
             return False
@@ -44,6 +52,11 @@ def allowed(uid, owner="", now=None):
 
 def update(uid, expires_at=None, revoke=False):
     uid = canonical_uid(uid)
+    if remote_enabled():
+        from cloud_state import update_invitation
+        if not revoke and (expires_at is None or expires_at.tzinfo is None or expires_at <= datetime.now(timezone.utc)):
+            raise ValueError('Invitation expiry must be timezone-aware and in the future')
+        return update_invitation(key_for(uid), int(expires_at.timestamp()) if not revoke else 0, revoke=revoke)
     ACCESS_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with file_lock(ACCESS_FILE.with_suffix(".lock")):
         if ACCESS_FILE.is_symlink():

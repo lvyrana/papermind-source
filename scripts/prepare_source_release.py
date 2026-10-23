@@ -9,15 +9,22 @@ from check_public_release import check, inspect_file, private_path
 ROOT_FILES = {"README.md", "CHANGELOG.md", "DECISIONS.md", "THIRD_PARTY_NOTICES.md",
               "LICENSE", "LICENSE.md", "LICENSE.txt", ".gitignore", ".gitattributes"}
 PUBLIC_DOCS = {"docs/trial-guide.md", "docs/deep-reading-overview.md", "docs/chinese-reading-validation.md",
-               "docs/open-source-readiness.md", "docs/deployment-recovery.md", "docs/zotero-login.md"}
+               "docs/open-source-readiness.md", "docs/deployment-recovery.md", "docs/zotero-login.md",
+               "docs/connector-0.7.0-release.md", "docs/vercel-deployment.md"}
+PUBLIC_SCREENSHOTS = {"docs/screenshots/litfinch-welcome-20261022.png",
+                      "docs/screenshots/litfinch-demo-20261022.png",
+                      "docs/screenshots/README.md"}
 ROOTS = {"web", "papermind", "scripts", "tests", "deploy", ".github", "zotero-plugin"}
 
 
 def included(name):
     path = PurePosixPath(name)
+    # Machine-specific scheduler contains private absolute paths.
+    if name == "deploy/com.litfinch.cloud-backup.plist":
+        return False
     if private_path(name):
         return False
-    return name in ROOT_FILES or name in PUBLIC_DOCS or path.parts[0] in ROOTS
+    return name in ROOT_FILES or name in PUBLIC_DOCS or name in PUBLIC_SCREENSHOTS or path.parts[0] in ROOTS
 
 
 def prepare(root, target, draft=False):

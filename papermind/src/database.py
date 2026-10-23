@@ -9,11 +9,16 @@ import json
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from typing import Optional
+from sql_backend import connect_remote, remote_enabled
+from time_utils import data_timestamp
 
 DB_PATH = Path(__file__).parent.parent / "data" / "paperdiary.db"
 
 
 def _ensure_db():
+    if remote_enabled():
+        # Do not run dozens of schema migrations on every network request.
+        return connect_remote("library")
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
@@ -331,6 +336,8 @@ def _ensure_db():
 
 
 def get_conn():
+    if remote_enabled():
+        return connect_remote("library")
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -339,7 +346,7 @@ def get_conn():
 
 
 def init_db():
-    _ensure_db()
+    _ensure_db().close()
 
 
 # ========== Rate Limiting ==========
@@ -468,7 +475,7 @@ def save_profile(user_id: str, profile: dict):
         profile.get("last_recent_updated_at", ""),
         profile.get("last_core_merged_at", ""),
         profile.get("core_source", ""),
-        datetime.now().isoformat(),
+        data_timestamp(),
     ))
     conn.commit()
     conn.close()
@@ -479,7 +486,7 @@ def increment_recent_events(user_id: str) -> int:
     conn = _ensure_db()
     conn.execute(
         "INSERT INTO user_profiles (user_id, updated_at) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING",
-        (user_id, datetime.now().isoformat()),
+        (user_id, data_timestamp()),
     )
     conn.execute(
         "UPDATE user_profiles SET behavior_events_since_recent = COALESCE(behavior_events_since_recent, 0) + 1 WHERE user_id = ?",
@@ -502,7 +509,7 @@ def reset_recent_events(user_id: str):
 def save_search_run(user_id: str, source: str, trace: dict) -> int:
     """保存一次检索轨迹，便于后续排查召回问题。"""
     conn = _ensure_db()
-    now = datetime.now().isoformat()
+    now = data_timestamp()
     cursor = conn.execute(
         "INSERT INTO search_runs (user_id, source, created_at, trace_json) VALUES (?, ?, ?, ?)",
         (user_id, source or "all", now, json.dumps(trace, ensure_ascii=False)),
@@ -571,7 +578,7 @@ def save_paper(paper: dict, user_id: str = "") -> int:
                 last_read_at = ?
             WHERE id = ?
         """, (paper.get("summary_zh"), paper.get("relevance"),
-              datetime.now().isoformat(), existing["id"]))
+              data_timestamp(), existing["id"]))
         conn.commit()
         conn.close()
         return existing["id"]
@@ -596,8 +603,8 @@ def save_paper(paper: dict, user_id: str = "") -> int:
         paper.get("category", ""),
         paper.get("summary_zh", ""),
         paper.get("relevance", ""),
-        datetime.now().isoformat(),
-        datetime.now().isoformat(),
+        data_timestamp(),
+        data_timestamp(),
     ))
     conn.commit()
     row_id = cursor.lastrowid
@@ -627,7 +634,7 @@ def mark_exported(paper_id: int):
     汇报板在打开精读台时就会惰性创建。"""
     conn = _ensure_db()
     conn.execute("UPDATE saved_papers SET last_exported_at = ? WHERE id = ?",
-                 (datetime.now().isoformat(), paper_id))
+                 (data_timestamp(), paper_id))
     conn.commit()
     conn.close()
 
@@ -637,7 +644,7 @@ def touch_last_read(paper_id: int):
     conn = _ensure_db()
     conn.execute(
         "UPDATE saved_papers SET last_read_at = ? WHERE id = ?",
-        (datetime.now().isoformat(), paper_id),
+        (data_timestamp(), paper_id),
     )
     conn.commit()
     conn.close()
@@ -679,7 +686,7 @@ def get_self_test(paper_rowid: int) -> list[dict]:
 def init_self_test(paper_rowid: int, pillars: list[dict] = None) -> list[dict]:
     """首次进入自测时建会话。pillars 可由 AI 按论文实例化，缺省用通用问法。"""
     pillars = pillars or DEFAULT_PILLARS
-    now = datetime.now().isoformat()
+    now = data_timestamp()
     conn = _ensure_db()
     for i, p in enumerate(pillars):
         conn.execute(
@@ -706,7 +713,7 @@ def update_self_test(paper_rowid: int, pillar_key: str, state: str = None,
         sets.append("turn_count = ?"); params.append(turn_count)
     if not sets:
         return
-    sets.append("updated_at = ?"); params.append(datetime.now().isoformat())
+    sets.append("updated_at = ?"); params.append(data_timestamp())
     params += [paper_rowid, pillar_key]
     conn = _ensure_db()
     conn.execute(
@@ -740,7 +747,7 @@ def save_paper_page_ocr(paper_rowid: int, page_number: int, text: str, model: st
              text = excluded.text,
              model = excluded.model,
              updated_at = excluded.updated_at""",
-        (paper_rowid, page_number, text, model, datetime.now().isoformat()),
+        (paper_rowid, page_number, text, model, data_timestamp()),
     )
     conn.commit()
     conn.close()
@@ -751,7 +758,7 @@ def record_method_gap(user_id: str, term: str, paper_rowid: int = None):
     term = (term or "").strip()
     if not term:
         return
-    now = datetime.now().isoformat()
+    now = data_timestamp()
     conn = _ensure_db()
     conn.execute(
         """INSERT INTO method_gaps (user_id, term, times, last_paper_rowid, last_at)
@@ -840,7 +847,7 @@ def save_stated_memory(user_id: str, items: list[dict]):
            VALUES (?, ?, ?)
            ON CONFLICT(user_id) DO UPDATE SET
              memory_stated = excluded.memory_stated, updated_at = excluded.updated_at""",
-        (user_id, json.dumps(items[:12], ensure_ascii=False), datetime.now().isoformat()),
+        (user_id, json.dumps(items[:12], ensure_ascii=False), data_timestamp()),
     )
     conn.commit()
     conn.close()
@@ -870,7 +877,7 @@ def wipe_memory(user_id: str, include_legacy_profile: bool = True):
     conn = _ensure_db()
     conn.execute(
         f"UPDATE user_profiles SET {', '.join(cols)}, updated_at = ? WHERE user_id = ?",
-        (datetime.now().isoformat(), user_id),
+        (data_timestamp(), user_id),
     )
     conn.commit()
     conn.close()
@@ -886,7 +893,7 @@ def update_memory_fields(user_id: str, memory_core: Optional[str] = None,
         sets.append("memory_recent = ?"); params.append(memory_recent)
     if not sets:
         return
-    sets.append("updated_at = ?"); params.append(datetime.now().isoformat())
+    sets.append("updated_at = ?"); params.append(data_timestamp())
     params.append(user_id)
     conn = _ensure_db()
     conn.execute(f"UPDATE user_profiles SET {', '.join(sets)} WHERE user_id = ?", params)
@@ -944,8 +951,24 @@ def get_saved_paper(paper_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def delete_saved_paper(paper_id: int):
+def delete_saved_paper(paper_id: int, *, connection=None):
+    if connection is not None:
+        _delete_saved_paper_rows(connection, paper_id)
+        return
     conn = _ensure_db()
+    try:
+        _delete_saved_paper_rows(conn, paper_id)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _delete_saved_paper_rows(conn, paper_id):
+    if remote_enabled():
+        conn.execute("DELETE FROM durable_jobs WHERE kind='paper-enrich' AND entity=?", (str(paper_id),))
     conn.execute("DELETE FROM self_test_sessions WHERE paper_rowid = ?", (paper_id,))
     conn.execute("DELETE FROM paper_page_ocr WHERE paper_rowid = ?", (paper_id,))
     conn.execute("DELETE FROM paper_notes WHERE paper_rowid = ?", (paper_id,))
@@ -957,8 +980,6 @@ def delete_saved_paper(paper_id: int):
     conn.execute("UPDATE reading_history SET paper_rowid = NULL WHERE paper_rowid = ?", (paper_id,))
     conn.execute("UPDATE method_gaps SET last_paper_rowid = NULL WHERE last_paper_rowid = ?", (paper_id,))
     conn.execute("DELETE FROM saved_papers WHERE id = ?", (paper_id,))
-    conn.commit()
-    conn.close()
 
 
 def update_paper_enrichment(paper_id: int, summary_zh: str, relevance: str, category: str = ""):
@@ -980,7 +1001,7 @@ def update_paper_enrichment(paper_id: int, summary_zh: str, relevance: str, cate
 
 def save_note(paper_rowid: int, content: str, source: str = "manual", note_id: int = None) -> int:
     conn = _ensure_db()
-    now = datetime.now().isoformat()
+    now = data_timestamp()
 
     # 更新已有笔记（按 id）
     if note_id:
@@ -1040,7 +1061,7 @@ CARD_TYPES = ("method", "finding", "critique", "transfer")
 def save_card(paper_rowid: int, card_type: str, title: str, content: str,
               quote: str = "", page: int = None, source: str = "manual") -> int:
     conn = _ensure_db()
-    now = datetime.now().isoformat()
+    now = data_timestamp()
     if card_type not in CARD_TYPES:
         card_type = "method"
     cursor = conn.execute(
@@ -1081,7 +1102,7 @@ def update_card(card_id: int, card_type: str = None, title: str = None,
         conn.close()
         return False
     updates.append("updated_at = ?")
-    params.append(datetime.now().isoformat())
+    params.append(data_timestamp())
     params.append(card_id)
     conn.execute(f"UPDATE reading_cards SET {', '.join(updates)} WHERE id = ?", params)
     conn.commit()
@@ -1122,7 +1143,7 @@ def _quote_row_to_dict(row) -> dict:
 def save_quote(paper_rowid: int, text: str, page: int = None, section: str = "", anchor: dict = None,
                question: str = "", answer: str = "", source: str = "chat") -> dict:
     conn = _ensure_db()
-    now = datetime.now().isoformat()
+    now = data_timestamp()
     anchor_json = json.dumps(anchor or {}, ensure_ascii=False)
     cursor = conn.execute(
         """INSERT INTO paper_quotes
@@ -1188,7 +1209,7 @@ def get_or_create_board(paper_rowid: int, why_reading: str = "") -> dict:
         "SELECT * FROM presentation_boards WHERE paper_rowid = ?", (paper_rowid,)
     ).fetchone()
     if not row:
-        now = datetime.now().isoformat()
+        now = data_timestamp()
         conn.execute(
             """INSERT INTO presentation_boards (paper_rowid, sections_json, why_reading, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?)""",
@@ -1209,7 +1230,7 @@ def get_or_create_board(paper_rowid: int, why_reading: str = "") -> dict:
 
 def update_board(paper_rowid: int, sections: list = None, why_reading: str = None):
     conn = _ensure_db()
-    now = datetime.now().isoformat()
+    now = data_timestamp()
     if sections is not None:
         conn.execute(
             "UPDATE presentation_boards SET sections_json = ?, updated_at = ? WHERE paper_rowid = ?",
@@ -1229,7 +1250,7 @@ def add_board_item(paper_rowid: int, section: str, content: str, quote: str = ""
     if source not in BOARD_ITEM_SOURCES:
         source = "manual"
     conn = _ensure_db()
-    now = datetime.now().isoformat()
+    now = data_timestamp()
     max_order = conn.execute(
         "SELECT COALESCE(MAX(sort_order), 0) FROM board_items WHERE paper_rowid = ? AND section = ?",
         (paper_rowid, section)
@@ -1264,7 +1285,7 @@ def get_board_items(paper_rowid: int) -> list[dict]:
 
 def update_board_item(item_id: int, content: str = None, section: str = None, sort_order: int = None):
     conn = _ensure_db()
-    now = datetime.now().isoformat()
+    now = data_timestamp()
     if content is not None:
         conn.execute("UPDATE board_items SET content = ?, updated_at = ? WHERE id = ?", (content, now, item_id))
     if section is not None:
@@ -1298,7 +1319,7 @@ def save_chat_message(paper_rowid: int, role: str, content: str):
     conn = _ensure_db()
     conn.execute(
         "INSERT INTO paper_chats (paper_rowid, role, content, created_at) VALUES (?, ?, ?, ?)",
-        (paper_rowid, role, content, datetime.now().isoformat())
+        (paper_rowid, role, content, data_timestamp())
     )
     conn.commit()
     conn.close()
@@ -1364,7 +1385,7 @@ def record_reading(paper_rowid: int | None, title: str, user_id: str = ""):
     conn = _ensure_db()
     conn.execute(
         "INSERT INTO reading_history (user_id, paper_rowid, title, read_at) VALUES (?, ?, ?, ?)",
-        (user_id, paper_rowid, title, datetime.now().isoformat())
+        (user_id, paper_rowid, title, data_timestamp())
     )
     conn.commit()
     conn.close()
@@ -1433,7 +1454,7 @@ def save_feedback(user_id: str, feedback_type: str, content: str) -> int:
     conn = _ensure_db()
     cursor = conn.execute(
         "INSERT INTO user_feedback (user_id, type, content, created_at) VALUES (?, ?, ?, ?)",
-        (user_id, feedback_type, content, datetime.now().isoformat())
+        (user_id, feedback_type, content, data_timestamp())
     )
     conn.commit()
     row_id = cursor.lastrowid
@@ -1467,7 +1488,7 @@ def create_project(user_id: str, name: str, description: str = "") -> int:
     conn = _ensure_db()
     cursor = conn.execute(
         "INSERT INTO projects (user_id, name, description, created_at) VALUES (?, ?, ?, ?)",
-        (user_id, name, description, datetime.now().isoformat())
+        (user_id, name, description, data_timestamp())
     )
     conn.commit()
     row_id = cursor.lastrowid
@@ -1590,6 +1611,6 @@ def save_enrichment_cache(paper: dict, summary_zh: str, relevance: str, key_find
             key_findings = excluded.key_findings,
             created_at = excluded.created_at
     """, (key, summary_zh, relevance, json.dumps(key_findings, ensure_ascii=False),
-          datetime.now().isoformat()))
+          data_timestamp()))
     conn.commit()
     conn.close()

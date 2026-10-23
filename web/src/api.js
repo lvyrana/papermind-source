@@ -86,7 +86,9 @@ async function handleResponse(r) {
   if (!r.ok) {
     throw new Error(`API error: ${r.status} ${r.statusText}`)
   }
-  return r.json()
+  const data = await r.json()
+  if (data?.task?.state === 'queued') window.dispatchEvent(new Event('papermind-tasks-changed'))
+  return data
 }
 
 async function fetchWithTimeout(url, init, timeoutMs = 0) {

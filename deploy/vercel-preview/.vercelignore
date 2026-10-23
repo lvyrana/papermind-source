@@ -1,0 +1,14 @@
+/*
+!app.py
+!.python-version
+!vercel.json
+!requirements.txt
+!papermind
+!web
+!api
+!package.json
+!package-lock.json
+**/__pycache__/**
+**/.venv*/**
+**/data/**
+**/.env*

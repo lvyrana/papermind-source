@@ -12,6 +12,31 @@ from prepare_source_release import prepare
 
 
 class PublicReleaseTests(unittest.TestCase):
+    def test_public_deployment_guide_excludes_private_migration_receipts(self):
+        from prepare_source_release import included
+        self.assertTrue(included("docs/vercel-deployment.md"))
+        self.assertFalse(included("docs/vercel-migration.md"))
+        self.assertFalse(included("docs/vercel-migration-preview-record.md"))
+        self.assertFalse(included("deploy/com.litfinch.cloud-backup.plist"))
+
+    def test_only_reviewed_screenshots_are_exported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, output = Path(directory) / "repo", Path(directory) / "export"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "LICENSE").write_text("Synthetic license fixture.\n")
+            folder = root / "docs/screenshots"
+            folder.mkdir(parents=True)
+            allowed = "litfinch-welcome-20261022.png"
+            for name in (allowed, "private.png", allowed + ".bak", "litfinch-welcome-20261023.png"):
+                (folder / name).write_bytes(b"synthetic image fixture")
+            prepare(root, output)
+            self.assertEqual([p.name for p in (output / "docs/screenshots").iterdir()], [allowed])
+            (folder / allowed).unlink()
+            (folder / allowed).symlink_to(folder / "private.png")
+            with self.assertRaises(ValueError):
+                prepare(root, Path(directory) / "linked")
+
     def test_history_finds_removed_secret_without_printing_it(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

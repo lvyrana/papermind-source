@@ -121,6 +121,12 @@ with limits.ai_slot(): os._exit(0)
             await client.close()
         asyncio.run(exercise())
 
+    def test_runtime_errors_distinguish_admission_from_storage_failure(self):
+        for error, expected in ((limits.RuntimeLimitError("budget"), 429),
+                                (limits.RuntimeStoreUnavailable("unavailable"), 503)):
+            response = asyncio.run(api.runtime_limit_response(None, error))
+            self.assertEqual(response.status_code, expected)
+
 
 class InvitationTests(unittest.TestCase):
     def setUp(self):
@@ -244,7 +250,7 @@ class UploadQuotaTests(unittest.TestCase):
                 class DeleteWhileReading:
                     content_type = "application/pdf"
                     async def read(inner_self, size):
-                        self.assertTrue(api.api_delete_from_library(paper_id, request)["ok"])
+                        self.assertTrue((await api.api_delete_from_library(paper_id, request))["ok"])
                         return b"\x89PNG\r\n\x1a\nfixture" if figure else b"%PDF-1.7 fixture"
                 if figure:
                     result = asyncio.run(api.api_add_board_figure(paper_id, request, DeleteWhileReading(), "methods", None, ""))
@@ -265,5 +271,5 @@ class UploadQuotaTests(unittest.TestCase):
             paper_id = database.save_paper({"title": "Synthetic cleanup failure"}, UID)
             with patch.object(Path, "unlink", side_effect=PermissionError("fixture")):
                 with self.assertRaises(HTTPException):
-                    api.api_delete_from_library(paper_id, request)
+                    asyncio.run(api.api_delete_from_library(paper_id, request))
             self.assertTrue(api._get_owned_paper_or_none(paper_id, UID))
