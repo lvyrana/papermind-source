@@ -1,5 +1,8 @@
 # Historical screenshots and internal handoffs are not source-distribution assets.
 docs/screenshots/** export-ignore
+docs/screenshots/litfinch-welcome-20261022.png -export-ignore
+docs/screenshots/litfinch-demo-20261022.png -export-ignore
+docs/screenshots/README.md -export-ignore
 docs/*handoff* export-ignore
 AGENTS.md export-ignore
 skills/** export-ignore

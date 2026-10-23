@@ -11,10 +11,10 @@
     "docs/open-source-readiness.md"
   ],
   "sha256": {
-    ".gitattributes": "40e5c309eeb783987b406f32a6bfb36aee4cf9c9b8ae5f0ca8b86e1dcc203cbe",
+    ".gitattributes": "ba6b1977536d014d54ea57da9999405650334836895358c75580b26386fcccf5",
     ".github/workflows/checks.yml": "78b46ab94cec4c0690aea4202ef8b1e51bcbbc1969454f985ee763ce64a299cc",
     ".gitignore": "6924f2b223b801e353ee2c4b0a109c5d8186c85d3e0dc949dd674f3b0d96a97d",
-    "CHANGELOG.md": "478f27792c058e698d7daca969845397fdb99f601f2405d0a0dda3c60a673da2",
+    "CHANGELOG.md": "e11453a56b4b72d592ab1a9fb1c60d9f4411b7ed60e2f8bf2a64bc413a2b967f",
     "DECISIONS.md": "f7765150c381c4a29fce1ff2ee7566e6719fd539a090a28602b4234cd80fcf1c",
     "LICENSE": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
     "README.md": "18441e6ddc43f1e3cf81037768afe0ae4102994b4d3827ec9b060bfb9b988073",
