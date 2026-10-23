@@ -7,10 +7,10 @@ import json
 from check_public_release import check, inspect_file, private_path
 
 ROOT_FILES = {"README.md", "CHANGELOG.md", "DECISIONS.md", "THIRD_PARTY_NOTICES.md",
-              "LICENSE", "LICENSE.md", "LICENSE.txt", ".gitignore", ".gitattributes"}
+              "LICENSE", "LICENSE.md", "LICENSE.txt", "VERSION", ".gitignore", ".gitattributes"}
 PUBLIC_DOCS = {"docs/trial-guide.md", "docs/deep-reading-overview.md", "docs/chinese-reading-validation.md",
                "docs/open-source-readiness.md", "docs/deployment-recovery.md", "docs/zotero-login.md",
-               "docs/connector-0.7.0-release.md", "docs/vercel-deployment.md"}
+               "docs/connector-0.7.0-release.md", "docs/vercel-deployment.md", "docs/releases/v0.17.0.md"}
 PUBLIC_SCREENSHOTS = {"docs/screenshots/litfinch-welcome-20261022.png",
                       "docs/screenshots/litfinch-demo-20261022.png",
                       "docs/screenshots/README.md"}

@@ -12,6 +12,13 @@ from prepare_source_release import prepare
 
 
 class PublicReleaseTests(unittest.TestCase):
+    def test_release_metadata_uses_exact_public_paths(self):
+        from prepare_source_release import included
+        for name in ("VERSION", "docs/releases/v0.17.0.md"):
+            self.assertTrue(included(name))
+            self.assertFalse(included(name + ".bak"))
+        self.assertFalse(included("docs/releases/private-review.md"))
+
     def test_public_deployment_guide_excludes_private_migration_receipts(self):
         from prepare_source_release import included
         self.assertTrue(included("docs/vercel-deployment.md"))

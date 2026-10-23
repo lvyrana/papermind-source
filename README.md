@@ -4,6 +4,8 @@
 
 [在线体验](https://papermindapp.com/welcome) · [免费试读](https://papermindapp.com/demo) · [Zotero 插件源码](https://github.com/lvyrana/papermind-zotero) · [问题反馈](https://github.com/lvyrana/papermind-source/issues)
 
+网站本体版本：**[v0.17.0 · 云端迁移版](https://github.com/lvyrana/papermind-source/releases/tag/v0.17.0)**（2026-10-24）。[更新说明](docs/releases/v0.17.0.md)涵盖云端存储、持久任务、账号、备份及部署方式。本体与 Zotero 插件独立编号；插件当前版本为 0.7.1。
+
 
 ## 看看研雀怎么用
 
